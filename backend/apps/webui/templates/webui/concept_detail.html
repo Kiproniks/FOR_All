@@ -1,0 +1,57 @@
+{% extends "webui/base.html" %}
+{% block title %}Concept Detail{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="row">
+        <div class="grow">
+            <h1>{{ concept.name }}</h1>
+            <p class="muted">Normalized: {{ concept.normalized_name }}</p>
+            <p class="pre">{{ concept.description|default:"No global description." }}</p>
+        </div>
+        <a class="btn gray" href="{% url 'webui:concepts' %}">Back</a>
+        <a class="btn outline" href="{% url 'webui:concept-compare' concept.id %}">Compare concept</a>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Mentions</h3>
+    {% if mentions %}
+        {% for mention in mentions %}
+            <div class="card">
+                <p><strong>Book:</strong> {{ mention.global_book.title }}</p>
+                <p><strong>Block:</strong>
+                    {% if mention.user_book_id %}
+                        <a href="{% url 'webui:block-detail' mention.user_book_id mention.logical_block_id %}">
+                            {{ mention.logical_block.title }}
+                        </a>
+                    {% else %}
+                        {{ mention.logical_block.title }}
+                    {% endif %}
+                </p>
+                <p><strong>Importance:</strong> {{ mention.importance_score }}</p>
+                <p class="pre"><strong>Original explanation:</strong> {{ mention.short_explanation }}</p>
+                {% if mention.custom_explanation %}
+                    <p class="pre"><strong>Custom explanation:</strong> {{ mention.custom_explanation }}</p>
+                {% endif %}
+                {% if mention.source_quote %}
+                    <p class="pre"><strong>Source quote:</strong> {{ mention.source_quote }}</p>
+                {% endif %}
+
+                <form method="post" action="{% url 'webui:edit-mention' mention.id %}" style="margin-bottom:8px;">
+                    {% csrf_token %}
+                    <label for="custom_{{ mention.id }}">Custom explanation</label>
+                    <textarea id="custom_{{ mention.id }}" name="custom_explanation" rows="4">{{ mention.custom_explanation }}</textarea>
+                    <button class="btn green" type="submit">Save custom explanation</button>
+                </form>
+
+                <form method="post" action="{% url 'webui:reset-mention' mention.id %}">
+                    {% csrf_token %}
+                    <button class="btn red" type="submit">Reset custom explanation</button>
+                </form>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">No mentions for this concept.</p>
+    {% endif %}
+</div>
+{% endblock %}

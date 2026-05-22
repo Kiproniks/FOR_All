@@ -1,0 +1,17 @@
+Django>=6.0,<6.1
+djangorestframework>=3.17,<3.18
+django-cors-headers>=4.9,<5
+psycopg2-binary>=2.9,<3
+celery>=5.6,<6
+redis>=7.0,<8
+pymorphy3>=2.0,<3
+razdel>=0.5,<1
+lxml>=6.0,<7
+reportlab>=4.5,<5
+python-dotenv>=1.0,<2
+aiogram>=3.13,<4
+requests>=2.32,<3
+chromadb>=0.5,<1
+sentence-transformers>=3.0,<4
+pypdf>=5.9,<6
+networkx>=3.4,<4

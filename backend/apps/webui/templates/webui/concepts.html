@@ -1,0 +1,50 @@
+{% extends "webui/base.html" %}
+{% block title %}All Concepts{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="row">
+        <div class="grow">
+            <h1>All Concepts</h1>
+            <p class="muted">Concepts from all your books.</p>
+        </div>
+        <a class="btn gray" href="{% url 'webui:library' %}">Back</a>
+    </div>
+    <form method="get" class="row">
+        <input class="grow" type="text" name="q" value="{{ query }}" placeholder="Search concept...">
+        <button class="btn" type="submit">Search</button>
+    </form>
+</div>
+
+<div class="card">
+    {% if concepts_with_books %}
+        <table>
+            <thead>
+            <tr>
+                <th>Name</th>
+                <th>Mentions</th>
+                <th>Books</th>
+                <th>Actions</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for concept, books in concepts_with_books %}
+                <tr>
+                    <td>
+                        <strong>{{ concept.name }}</strong><br>
+                        <span class="muted">{{ concept.normalized_name }}</span>
+                    </td>
+                    <td>{{ concept.mentions_count }}</td>
+                    <td>{{ books|join:", " }}</td>
+                    <td>
+                        <a class="btn" href="{% url 'webui:concept-detail' concept.id %}">Open</a>
+                        <a class="btn outline" href="{% url 'webui:concept-compare' concept.id %}">Compare</a>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="muted">No concepts found.</p>
+    {% endif %}
+</div>
+{% endblock %}

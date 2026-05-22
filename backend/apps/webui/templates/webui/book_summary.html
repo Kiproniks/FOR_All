@@ -1,0 +1,116 @@
+{% extends "webui/base.html" %}
+{% block title %}Book Summary{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="row">
+        <div class="grow">
+            <h1>{{ book.title|default:book.original_filename }}</h1>
+            <p class="muted">{{ book.authors|default:"Unknown" }} | views: {{ book.views_count }} | status: {{ book.status }}</p>
+        </div>
+        <a class="btn gray" href="{% url 'webui:library' %}">Back</a>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Export</h3>
+    <div class="row">
+        <a class="btn outline" href="{% url 'webui:export-book' book.id 'pdf' %}">PDF</a>
+        <a class="btn outline" href="{% url 'webui:export-book' book.id 'txt' %}">TXT</a>
+        <a class="btn outline" href="{% url 'webui:export-book' book.id 'csv' %}">CSV</a>
+        <a class="btn outline" href="{% url 'webui:export-book' book.id 'json' %}">JSON</a>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Book Summary</h3>
+    {% if summary %}
+        <div class="pre">{{ summary }}</div>
+    {% else %}
+        <p class="muted">Summary is empty. Analysis may still be processing or source text was not extracted.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Themes ({{ themes|length }})</h3>
+    {% if themes %}
+        {% for theme in themes %}
+            <div class="card">
+                <h4>{{ theme.order_number }}. {{ theme.title }}</h4>
+                <p class="muted">
+                    Chapter: {{ theme.chapter_title|default:"-" }} |
+                    blocks: {{ theme.start_block_number }}-{{ theme.end_block_number }} |
+                    paragraphs: {{ theme.start_paragraph }}-{{ theme.end_paragraph }}
+                </p>
+                <div class="pre">{{ theme.summary|default:"No theme summary." }}</div>
+                <h5>Subtopics</h5>
+                {% with subtopics=theme.subtopics.all %}
+                    {% if subtopics %}
+                        <ul>
+                            {% for sub in subtopics %}
+                                <li>
+                                    <strong>{{ sub.name }}</strong> — {{ sub.summary|default:"No summary." }}
+                                    {% if sub.source_quote %}
+                                        <div class="muted">Quote: {{ sub.source_quote }}</div>
+                                    {% endif %}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        <p class="muted">No subtopics.</p>
+                    {% endif %}
+                {% endwith %}
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">No themes generated yet.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Logical Blocks ({{ blocks|length }})</h3>
+    {% if blocks %}
+        {% for block in blocks %}
+            <div class="card">
+                <h4>{{ block.order_number }}. {{ block.title }}</h4>
+                <p class="muted">Chapter: {{ block.chapter_title|default:"-" }} | paragraphs: {{ block.start_paragraph }}-{{ block.end_paragraph }} | tokens: {{ block.token_count }}</p>
+                <p class="pre">{{ block.short_summary|default:"No short summary." }}</p>
+                <a class="btn" href="{% url 'webui:block-detail' book.id block.id %}">Open block</a>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">No logical blocks found for this book.</p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Subtopic Mentions ({{ mentions|length }})</h3>
+    {% if mentions %}
+        <table>
+            <thead>
+            <tr>
+                <th>Concept</th>
+                <th>Explanation</th>
+                <th>Block</th>
+                <th>Score</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for mention in mentions %}
+                <tr>
+                    <td>{{ mention.concept.name }}</td>
+                    <td>{{ mention.short_explanation }}</td>
+                    <td>
+                        <a href="{% url 'webui:block-detail' book.id mention.logical_block_id %}">
+                            {{ mention.logical_block.title }}
+                        </a>
+                    </td>
+                    <td>{{ mention.importance_score }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="muted">No concepts found.</p>
+    {% endif %}
+</div>
+{% endblock %}

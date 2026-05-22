@@ -1,0 +1,28 @@
+{% extends "webui/base.html" %}
+{% block title %}Register{% endblock %}
+{% block content %}
+<div class="card" style="max-width: 520px; margin: 40px auto;">
+    <h2>Register</h2>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        <div style="margin-bottom:10px;">
+            <label for="{{ form.email.id_for_label }}">Email</label>
+            {{ form.email }}
+            {{ form.email.errors }}
+        </div>
+        <div style="margin-bottom:10px;">
+            <label for="{{ form.password1.id_for_label }}">Password</label>
+            {{ form.password1 }}
+            {{ form.password1.errors }}
+        </div>
+        <div style="margin-bottom:14px;">
+            <label for="{{ form.password2.id_for_label }}">Repeat password</label>
+            {{ form.password2 }}
+            {{ form.password2.errors }}
+        </div>
+        <button class="btn" type="submit">Create account</button>
+        <a class="btn outline" href="{% url 'webui:login' %}">Back to login</a>
+    </form>
+</div>
+{% endblock %}

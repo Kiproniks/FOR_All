@@ -1,0 +1,42 @@
+{% extends "webui/base.html" %}
+{% block title %}Block Detail{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="row">
+        <div class="grow">
+            <h2>{{ block.order_number }}. {{ block.title }}</h2>
+            <p class="muted">Book: {{ book.title|default:book.original_filename }} | Chapter: {{ block.chapter_title|default:"-" }}</p>
+            <p class="muted">Paragraphs: {{ block.start_paragraph }}-{{ block.end_paragraph }} | Tokens: {{ block.token_count }}</p>
+        </div>
+        <a class="btn gray" href="{% url 'webui:book-summary' book.id %}">Back to summary</a>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Short Summary</h3>
+    <p class="pre">{{ block.short_summary|default:"No summary." }}</p>
+</div>
+
+<div class="card">
+    <h3>Source Text</h3>
+    <div class="pre mono">{{ block.source_text }}</div>
+</div>
+
+<div class="card">
+    <h3>Concepts in this Block</h3>
+    {% if mentions %}
+        {% for mention in mentions %}
+            <div class="card">
+                <h4>{{ mention.concept.name }} <span class="badge">score: {{ mention.importance_score }}</span></h4>
+                <p class="pre">{{ mention.custom_explanation|default:mention.short_explanation }}</p>
+                {% if mention.source_quote %}
+                    <p class="muted"><strong>Quote:</strong> {{ mention.source_quote }}</p>
+                {% endif %}
+                <a class="btn outline" href="{% url 'webui:concept-detail' mention.concept_id %}">Open concept</a>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p class="muted">No concepts for this block.</p>
+    {% endif %}
+</div>
+{% endblock %}

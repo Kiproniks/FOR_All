@@ -1,0 +1,459 @@
+﻿{% extends "webui/base.html" %}
+{% block title %}Semantic Theme Map{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="row">
+        <div class="grow">
+            <h1>Semantic Theme Map</h1>
+            <p class="muted">
+                Layer 1: books. Layer 2: major themes. Layer 3: subtopics inside a theme.
+                Use mouse wheel to zoom and drag to pan.
+            </p>
+        </div>
+        <a class="btn gray" href="{% url 'webui:library' %}">Back</a>
+    </div>
+</div>
+
+{% if map_payload.nodes %}
+    {{ map_payload|json_script:"concept-map-data" }}
+    <div class="card" style="display:grid;grid-template-columns:300px 1fr 380px;gap:12px;">
+        <div style="border:1px solid #dbe0ea;border-radius:10px;padding:12px;overflow:auto;max-height:88vh;">
+            <h3 style="margin-top:0;">Filters</h3>
+            <label for="mapQuery">Search</label>
+            <input id="mapQuery" type="text" placeholder="Type book/theme/subtopic...">
+
+            <hr>
+            <div class="row" style="gap:8px;flex-wrap:wrap;">
+                <button type="button" class="btn gray" id="levelBack">Back Level</button>
+                <button type="button" class="btn outline" id="levelReset">Reset Level</button>
+                <button type="button" class="btn outline" id="viewReset">Reset View</button>
+            </div>
+            <div class="row" style="gap:8px;margin-top:8px;">
+                <button type="button" class="btn outline" id="zoomIn">+</button>
+                <button type="button" class="btn outline" id="zoomOut">-</button>
+            </div>
+            <p class="muted" id="levelInfo" style="margin-top:8px;"></p>
+
+            <hr>
+            <h4>Books</h4>
+            <div id="bookFilters"></div>
+
+            <hr>
+            <p class="muted" id="mapStats"></p>
+        </div>
+
+        <div style="border:1px solid #dbe0ea;border-radius:10px;overflow:hidden;background:#f8fafc;">
+            <svg id="conceptMapSvg" viewBox="0 0 2600 1500" style="width:100%;height:88vh;background:#ffffff;cursor:grab;"></svg>
+        </div>
+
+        <div style="border:1px solid #dbe0ea;border-radius:10px;padding:12px;overflow:auto;max-height:88vh;">
+            <h3 style="margin-top:0;">Detail</h3>
+            <div id="detailPanel" class="muted">Click a book point to open themes.</div>
+        </div>
+    </div>
+
+    <script>
+    (function () {
+      const payload = JSON.parse(document.getElementById('concept-map-data').textContent);
+      const nodes = payload.nodes || [];
+      const edges = payload.edges || [];
+      const booksPayload = payload.books || [];
+
+      const SVG_NS = 'http://www.w3.org/2000/svg';
+      const svg = document.getElementById('conceptMapSvg');
+      const detailPanel = document.getElementById('detailPanel');
+      const queryEl = document.getElementById('mapQuery');
+      const statsEl = document.getElementById('mapStats');
+      const levelInfoEl = document.getElementById('levelInfo');
+      const levelBackEl = document.getElementById('levelBack');
+      const levelResetEl = document.getElementById('levelReset');
+      const viewResetEl = document.getElementById('viewReset');
+      const zoomInEl = document.getElementById('zoomIn');
+      const zoomOutEl = document.getElementById('zoomOut');
+      const bookFiltersEl = document.getElementById('bookFilters');
+
+      const nodeById = new Map(nodes.map(node => [node.id, node]));
+      const containsEdges = edges.filter(edge => edge.type === 'contains');
+      const relatedThemeEdges = edges.filter(edge => edge.type === 'related');
+
+      const selectedBooks = new Set(booksPayload.map(item => item.id));
+      const state = {
+        level: 'books',
+        focusedBookId: null,
+        focusedThemeId: null,
+      };
+
+      const viewState = {
+        scale: 1,
+        tx: 0,
+        ty: 0,
+        isDragging: false,
+        dragStartX: 0,
+        dragStartY: 0,
+      };
+      const MIN_SCALE = 0.35;
+      const MAX_SCALE = 4.0;
+
+      const viewportGroup = document.createElementNS(SVG_NS, 'g');
+      svg.appendChild(viewportGroup);
+
+      function esc(value) {
+        return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      function checkbox(label, checked, onChange) {
+        const wrap = document.createElement('label');
+        wrap.style.display = 'block';
+        wrap.style.marginBottom = '6px';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = checked;
+        cb.style.width = 'auto';
+        cb.style.marginRight = '8px';
+        cb.addEventListener('change', () => onChange(cb.checked));
+        wrap.appendChild(cb);
+        wrap.appendChild(document.createTextNode(label));
+        return wrap;
+      }
+
+      booksPayload.forEach(book => {
+        bookFiltersEl.appendChild(
+          checkbox(
+            `${book.title} (${book.themes_count} themes)`,
+            true,
+            checked => {
+              if (checked) selectedBooks.add(book.id);
+              else selectedBooks.delete(book.id);
+              if (state.focusedBookId && !selectedBooks.has(state.focusedBookId)) {
+                state.focusedBookId = null;
+                state.focusedThemeId = null;
+                state.level = 'books';
+              }
+              render();
+            }
+          )
+        );
+      });
+
+      function bookNodes() {
+        return nodes.filter(node => node.type === 'book' && selectedBooks.has(node.id));
+      }
+
+      function themeNodesForBook(bookId) {
+        return nodes.filter(node => node.type === 'theme' && node.parent_id === bookId);
+      }
+
+      function subtopicNodesForTheme(themeId) {
+        return nodes.filter(node => node.type === 'subtopic' && node.parent_id === themeId);
+      }
+
+      function passesQuery(node) {
+        const q = (queryEl.value || '').trim().toLowerCase();
+        if (!q) return true;
+        const hay = `${node.label || ''} ${node.summary || ''} ${node.chapter_title || ''}`.toLowerCase();
+        return hay.includes(q);
+      }
+
+      function bookRelations() {
+        const relationMap = new Map();
+        relatedThemeEdges.forEach(edge => {
+          const left = nodeById.get(edge.source);
+          const right = nodeById.get(edge.target);
+          if (!left || !right) return;
+          const b1 = left.parent_id;
+          const b2 = right.parent_id;
+          if (!b1 || !b2 || b1 === b2) return;
+          if (!selectedBooks.has(b1) || !selectedBooks.has(b2)) return;
+          const key = [b1, b2].sort().join('::');
+          const prev = relationMap.get(key) || { source: [b1, b2].sort()[0], target: [b1, b2].sort()[1], weight: 0, count: 0 };
+          prev.weight += Number(edge.weight || 0);
+          prev.count += 1;
+          relationMap.set(key, prev);
+        });
+        return Array.from(relationMap.values()).map(item => ({
+          source: item.source,
+          target: item.target,
+          weight: item.count > 0 ? item.weight / item.count : item.weight,
+          type: 'related',
+        }));
+      }
+
+      function visibleData() {
+        if (state.level === 'books') {
+          const books = bookNodes().filter(passesQuery);
+          const ids = new Set(books.map(node => node.id));
+          const relations = bookRelations().filter(edge => ids.has(edge.source) && ids.has(edge.target));
+          return { visibleNodes: books, visibleEdges: relations };
+        }
+
+        if (state.level === 'themes') {
+          const focusBook = state.focusedBookId && selectedBooks.has(state.focusedBookId)
+            ? nodeById.get(state.focusedBookId)
+            : null;
+          const books = focusBook ? [focusBook] : bookNodes();
+          const themes = books
+            .flatMap(book => themeNodesForBook(book.id))
+            .filter(passesQuery);
+          const themeIds = new Set(themes.map(node => node.id));
+          const visibleEdges = containsEdges.filter(edge => themeIds.has(edge.target));
+          return { visibleNodes: [...books, ...themes], visibleEdges };
+        }
+
+        const focusTheme = state.focusedThemeId ? nodeById.get(state.focusedThemeId) : null;
+        if (!focusTheme) {
+          state.level = 'themes';
+          return visibleData();
+        }
+        const parentBook = nodeById.get(focusTheme.parent_id);
+        const subtopics = subtopicNodesForTheme(focusTheme.id).filter(passesQuery);
+        const subIds = new Set(subtopics.map(node => node.id));
+        const visibleEdges = containsEdges.filter(edge => edge.source === focusTheme.id && subIds.has(edge.target));
+        return {
+          visibleNodes: [parentBook, focusTheme, ...subtopics].filter(Boolean),
+          visibleEdges,
+        };
+      }
+
+      function renderDetail(node) {
+        if (!node) {
+          detailPanel.innerHTML = '<p class="muted">Click a point on the map.</p>';
+          return;
+        }
+
+        if (node.type === 'book') {
+          detailPanel.innerHTML = `
+            <div class="card">
+              <h3 style="margin-top:0;">${esc(node.label)}</h3>
+              <p class="muted">Themes: ${node.themes_count} | Subtopics: ${node.subtopics_count}</p>
+              <div class="pre">${esc(node.summary || 'Summary is not generated yet.')}</div>
+              <p><a class="btn" href="/library/books/${node.book_id}/">Open summary</a></p>
+            </div>
+          `;
+          return;
+        }
+
+        if (node.type === 'theme') {
+          const children = subtopicNodesForTheme(node.id).slice(0, 8);
+          const items = children.map(item => `
+            <div class="card" style="margin-bottom:8px;">
+              <div><strong>${esc(item.label)}</strong></div>
+              <div class="muted">p${item.start_paragraph}-${item.end_paragraph}</div>
+              <div class="pre">${esc(item.summary || '')}</div>
+            </div>
+          `).join('');
+
+          detailPanel.innerHTML = `
+            <div class="card">
+              <h3 style="margin-top:0;">${esc(node.label)}</h3>
+              <p class="muted">${esc(node.chapter_title || 'Chapter not set')} | blocks ${node.start_block_number}-${node.end_block_number} | p${node.start_paragraph}-${node.end_paragraph}</p>
+              <h4 style="margin-bottom:6px;">Main meaning</h4>
+              <div class="pre">${esc(node.summary || 'No summary.')}</div>
+              <p style="margin-top:10px;"><a class="btn" href="/library/books/${node.book_id}/">Open book</a></p>
+            </div>
+            <h4>Subtopics</h4>
+            ${items || '<p class="muted">No subtopics.</p>'}
+          `;
+          return;
+        }
+
+        detailPanel.innerHTML = `
+          <div class="card">
+            <h3 style="margin-top:0;">${esc(node.label)}</h3>
+            <p class="muted">p${node.start_paragraph}-${node.end_paragraph} | importance ${Number(node.importance_score || 0).toFixed(2)}</p>
+            <h4 style="margin-bottom:6px;">Short meaning</h4>
+            <div class="pre">${esc(node.summary || 'No summary.')}</div>
+            ${node.source_quote ? `<h4 style="margin-bottom:6px;margin-top:10px;">Source quote</h4><div class="pre muted">${esc(node.source_quote)}</div>` : ''}
+            <p style="margin-top:10px;"><a class="btn" href="/library/books/${node.book_id}/">Open source book</a></p>
+          </div>
+        `;
+      }
+
+      function setLevelInfo() {
+        if (state.level === 'books') {
+          levelInfoEl.textContent = `Level: Books | Zoom: ${viewState.scale.toFixed(2)}x`;
+          return;
+        }
+        if (state.level === 'themes') {
+          const label = state.focusedBookId && nodeById.get(state.focusedBookId)
+            ? nodeById.get(state.focusedBookId).label
+            : 'All selected books';
+          levelInfoEl.textContent = `Level: Themes (${label}) | Zoom: ${viewState.scale.toFixed(2)}x`;
+          return;
+        }
+        const label = state.focusedThemeId && nodeById.get(state.focusedThemeId)
+          ? nodeById.get(state.focusedThemeId).label
+          : 'Focused theme';
+        levelInfoEl.textContent = `Level: Subtopics (${label}) | Zoom: ${viewState.scale.toFixed(2)}x`;
+      }
+
+      function applyTransform() {
+        viewportGroup.setAttribute('transform', `translate(${viewState.tx} ${viewState.ty}) scale(${viewState.scale})`);
+      }
+
+      function zoomAt(factor, clientX, clientY) {
+        const oldScale = viewState.scale;
+        const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, oldScale * factor));
+        if (newScale === oldScale) return;
+
+        const point = svg.createSVGPoint();
+        point.x = clientX;
+        point.y = clientY;
+        const ctm = svg.getScreenCTM();
+        if (!ctm) return;
+        const p = point.matrixTransform(ctm.inverse());
+
+        viewState.tx = p.x - ((p.x - viewState.tx) * (newScale / oldScale));
+        viewState.ty = p.y - ((p.y - viewState.ty) * (newScale / oldScale));
+        viewState.scale = newScale;
+        applyTransform();
+        setLevelInfo();
+      }
+
+      function resetViewTransform() {
+        viewState.scale = 1;
+        viewState.tx = 0;
+        viewState.ty = 0;
+        applyTransform();
+        setLevelInfo();
+      }
+
+      function draw(visibleNodes, visibleEdges) {
+        viewportGroup.innerHTML = '';
+
+        visibleEdges.forEach(edge => {
+          const s = nodeById.get(edge.source);
+          const t = nodeById.get(edge.target);
+          if (!s || !t) return;
+          const line = document.createElementNS(SVG_NS, 'line');
+          line.setAttribute('x1', s.x);
+          line.setAttribute('y1', s.y);
+          line.setAttribute('x2', t.x);
+          line.setAttribute('y2', t.y);
+          line.setAttribute('stroke', edge.type === 'related' ? '#2563eb' : '#94a3b8');
+          line.setAttribute('stroke-width', edge.type === 'related' ? Math.min(6, 1.2 + Number(edge.weight || 0) * 3.8) : 1.5);
+          line.setAttribute('stroke-dasharray', edge.type === 'related' ? '6 4' : '');
+          line.setAttribute('opacity', edge.type === 'related' ? '0.78' : '0.82');
+          viewportGroup.appendChild(line);
+        });
+
+        visibleNodes.forEach(node => {
+          const g = document.createElementNS(SVG_NS, 'g');
+          g.style.cursor = 'pointer';
+
+          let fill = '#0ea5e9';
+          if (node.type === 'theme') fill = '#16a34a';
+          if (node.type === 'subtopic') fill = '#f59e0b';
+
+          const circle = document.createElementNS(SVG_NS, 'circle');
+          circle.setAttribute('cx', node.x);
+          circle.setAttribute('cy', node.y);
+          circle.setAttribute('r', Math.max(8, Number(node.size || 12)));
+          circle.setAttribute('fill', fill);
+          circle.setAttribute('stroke', '#1f2937');
+          circle.setAttribute('stroke-width', '1');
+          circle.setAttribute('opacity', '0.92');
+
+          const text = document.createElementNS(SVG_NS, 'text');
+          text.setAttribute('x', Number(node.x) + Number(node.size || 12) + 4);
+          text.setAttribute('y', Number(node.y) + 4);
+          text.setAttribute('font-size', node.type === 'book' ? '15' : '12');
+          text.setAttribute('fill', '#0f172a');
+          text.textContent = node.label;
+
+          g.appendChild(circle);
+          g.appendChild(text);
+          g.addEventListener('click', () => {
+            renderDetail(node);
+            if (node.type === 'book') {
+              state.focusedBookId = node.id;
+              state.focusedThemeId = null;
+              state.level = 'themes';
+              render();
+              return;
+            }
+            if (node.type === 'theme') {
+              state.focusedBookId = node.parent_id;
+              state.focusedThemeId = node.id;
+              state.level = 'subtopics';
+              render();
+            }
+          });
+          viewportGroup.appendChild(g);
+        });
+
+        applyTransform();
+      }
+
+      function render() {
+        const { visibleNodes, visibleEdges } = visibleData();
+        setLevelInfo();
+        statsEl.textContent = `Visible: ${visibleNodes.length} nodes, ${visibleEdges.length} links`;
+        draw(visibleNodes, visibleEdges);
+      }
+
+      queryEl.addEventListener('input', render);
+
+      levelBackEl.addEventListener('click', () => {
+        if (state.level === 'subtopics') {
+          state.level = 'themes';
+          state.focusedThemeId = null;
+        } else if (state.level === 'themes') {
+          state.level = 'books';
+          state.focusedBookId = null;
+        }
+        render();
+      });
+
+      levelResetEl.addEventListener('click', () => {
+        state.level = 'books';
+        state.focusedBookId = null;
+        state.focusedThemeId = null;
+        queryEl.value = '';
+        renderDetail(null);
+        render();
+      });
+
+      viewResetEl.addEventListener('click', resetViewTransform);
+      zoomInEl.addEventListener('click', (event) => zoomAt(1.18, event.clientX || window.innerWidth / 2, event.clientY || window.innerHeight / 2));
+      zoomOutEl.addEventListener('click', (event) => zoomAt(1 / 1.18, event.clientX || window.innerWidth / 2, event.clientY || window.innerHeight / 2));
+
+      svg.addEventListener('wheel', (event) => {
+        event.preventDefault();
+        const factor = event.deltaY < 0 ? 1.12 : 1 / 1.12;
+        zoomAt(factor, event.clientX, event.clientY);
+      }, { passive: false });
+
+      svg.addEventListener('mousedown', (event) => {
+        viewState.isDragging = true;
+        viewState.dragStartX = event.clientX;
+        viewState.dragStartY = event.clientY;
+        svg.style.cursor = 'grabbing';
+      });
+
+      window.addEventListener('mousemove', (event) => {
+        if (!viewState.isDragging) return;
+        const dx = event.clientX - viewState.dragStartX;
+        const dy = event.clientY - viewState.dragStartY;
+        viewState.dragStartX = event.clientX;
+        viewState.dragStartY = event.clientY;
+        viewState.tx += dx;
+        viewState.ty += dy;
+        applyTransform();
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (!viewState.isDragging) return;
+        viewState.isDragging = false;
+        svg.style.cursor = 'grab';
+      });
+
+      render();
+    })();
+    </script>
+{% else %}
+    <div class="card">
+        <h3>Map is empty</h3>
+        <p class="muted">Analyze at least one book to build book-theme-subtopic graph.</p>
+    </div>
+{% endif %}
+{% endblock %}

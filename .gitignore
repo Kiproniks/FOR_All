@@ -1,0 +1,41 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Virtualenvs
+venv/
+.venv/
+backend/venv/
+
+# Django
+backend/db.sqlite3
+backend/media/
+backend/staticfiles/
+
+# Secrets
+.env
+backend/.env
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.tmp
+Thumbs.db
+.DS_Store
+
+# Runtime logs/data
+run_logs/
+postgres_data/
+chroma_db/
+backend/chroma_db/
+
+# Node (if added later)
+node_modules/
+frontend/node_modules/

@@ -1,0 +1,91 @@
+{% extends "webui/base.html" %}
+{% block title %}Library{% endblock %}
+{% block content %}
+<div class="card">
+    <h1>My Library</h1>
+    <p class="muted">
+        Books: <strong>{{ books_count }}/{{ max_books }}</strong>,
+        protected: <strong>{{ protected_count }}</strong>.
+    </p>
+</div>
+
+<div class="card">
+    <h3>Upload Books</h3>
+    <form method="post" action="{% url 'webui:upload-books' %}" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div style="margin-bottom:10px;">
+            <label for="id_files">FB2 or PDF files (max 50 MB each)</label>
+            <input type="file" id="id_files" name="files" multiple accept=".fb2,.pdf,application/pdf">
+        </div>
+        <div style="margin-bottom:12px;">
+            <label>
+                <input type="checkbox" name="confirm_rotation" value="1" style="width:auto;">
+                Confirm auto-rotation if limit is reached
+            </label>
+        </div>
+        <button class="btn green" type="submit">Upload</button>
+    </form>
+    {% if oldest_unprotected %}
+        <p class="muted" style="margin-top:10px;">
+            Oldest unprotected book: <span class="mono">{{ oldest_unprotected.title|default:oldest_unprotected.original_filename }}</span>
+        </p>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3>Your Books</h3>
+    <p class="muted">
+        Semantic map and cross-book theme links:
+        <a href="{% url 'webui:concept-map' %}">open theme map</a>.
+    </p>
+    {% if books %}
+        <table>
+            <thead>
+            <tr>
+                <th>Title</th>
+                <th>Status</th>
+                <th>Protected</th>
+                <th>Blocks</th>
+                <th>Concepts</th>
+                <th>Actions</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for book in books %}
+                <tr>
+                    <td>
+                        <strong>{{ book.title|default:book.original_filename }}</strong><br>
+                        <span class="muted">{{ book.authors|default:"Unknown" }}</span>
+                    </td>
+                    <td><span class="badge">{{ book.status }}</span></td>
+                    <td>{% if book.is_protected %}Yes{% else %}No{% endif %}</td>
+                    <td>{{ book.logical_blocks_count }}</td>
+                    <td>{{ book.concepts_count }}</td>
+                    <td>
+                        <div class="row">
+                            <a class="btn" href="{% url 'webui:book-summary' book.id %}">Open</a>
+                            <form method="post" action="{% url 'webui:protect-book' book.id %}">
+                                {% csrf_token %}
+                                <button class="btn gray" type="submit">
+                                    {% if book.is_protected %}Unprotect{% else %}Protect{% endif %}
+                                </button>
+                            </form>
+                            <form method="post" action="{% url 'webui:reanalyze-book' book.id %}">
+                                {% csrf_token %}
+                                <button class="btn outline" type="submit">Reanalyze</button>
+                            </form>
+                            <form method="post" action="{% url 'webui:delete-book' book.id %}">
+                                {% csrf_token %}
+                                <button class="btn red" type="submit">Delete</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p class="muted">No books yet.</p>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,33 @@
+{% extends "webui/base.html" %}
+{% block title %}Concept Compare{% endblock %}
+{% block content %}
+<div class="card">
+    <div class="row">
+        <div class="grow">
+            <h1>Compare: {{ concept.name }}</h1>
+            <p class="muted">Cross-book comparison generated from your mentions.</p>
+        </div>
+        <a class="btn gray" href="{% url 'webui:concept-detail' concept.id %}">Back</a>
+    </div>
+</div>
+
+<div class="card">
+    <h3>LLM Comparison</h3>
+    <div class="pre">{{ comparison }}</div>
+</div>
+
+<div class="card">
+    <h3>Sources</h3>
+    {% for mention in mentions %}
+        <div class="card">
+            <p><strong>{{ mention.global_book.title }}</strong> | {{ mention.logical_block.title }}</p>
+            <p class="pre">{{ mention.short_explanation }}</p>
+            {% if mention.source_quote %}
+                <p class="pre muted">{{ mention.source_quote }}</p>
+            {% endif %}
+        </div>
+    {% empty %}
+        <p class="muted">No source mentions.</p>
+    {% endfor %}
+</div>
+{% endblock %}
