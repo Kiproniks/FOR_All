@@ -1,42 +1,188 @@
 {% extends "webui/base.html" %}
-{% block title %}Block Detail{% endblock %}
+{% block title %}{% if logical_block %}Logical Block{% else %}Block not found{% endif %}{% endblock %}
 {% block content %}
-<div class="card">
-    <div class="row">
-        <div class="grow">
-            <h2>{{ block.order_number }}. {{ block.title }}</h2>
-            <p class="muted">Book: {{ book.title|default:book.original_filename }} | Chapter: {{ block.chapter_title|default:"-" }}</p>
-            <p class="muted">Paragraphs: {{ block.start_paragraph }}-{{ block.end_paragraph }} | Tokens: {{ block.token_count }}</p>
+<nav class="breadcrumbs">
+    <a href="{% url 'webui:library' %}">Library</a>
+    <a href="{% url 'webui:book-summary' book.id %}">{{ book.title|default:book.original_filename }}</a>
+    <span>{% if logical_block %}Block {{ logical_block.order_number }}{% else %}Block not found{% endif %}</span>
+</nav>
+
+{% if not logical_block %}
+    <section class="hero-card warning-box">
+        <div class="page-kicker">Missing source</div>
+        <h1>Block not found</h1>
+        <p class="muted">Logical block with id <span class="mono">{{ not_found_block_id }}</span> was not found in this book.</p>
+        {% if from_map %}
+            <p class="muted">You came from Semantic Theme Map. The saved map link may point to an old block id.</p>
+        {% endif %}
+        <div class="action-bar">
+            <a class="btn" href="{% url 'webui:book-summary' book.id %}">Back to book</a>
+            {% if from_map %}
+                <a class="btn outline" href="{% url 'webui:concept-map' %}{% if theme_id or subtopic_id %}?theme={{ theme_id|default:'' }}&subtopic={{ subtopic_id|default:'' }}{% endif %}">Back to Semantic Map</a>
+            {% endif %}
+            <a class="btn gray" href="{% url 'webui:library' %}">Library</a>
         </div>
-        <a class="btn gray" href="{% url 'webui:book-summary' book.id %}">Back to summary</a>
-    </div>
-</div>
-
-<div class="card">
-    <h3>Short Summary</h3>
-    <p class="pre">{{ block.short_summary|default:"No summary." }}</p>
-</div>
-
-<div class="card">
-    <h3>Source Text</h3>
-    <div class="pre mono">{{ block.source_text }}</div>
-</div>
-
-<div class="card">
-    <h3>Concepts in this Block</h3>
-    {% if mentions %}
-        {% for mention in mentions %}
-            <div class="card">
-                <h4>{{ mention.concept.name }} <span class="badge">score: {{ mention.importance_score }}</span></h4>
-                <p class="pre">{{ mention.custom_explanation|default:mention.short_explanation }}</p>
-                {% if mention.source_quote %}
-                    <p class="muted"><strong>Quote:</strong> {{ mention.source_quote }}</p>
-                {% endif %}
-                <a class="btn outline" href="{% url 'webui:concept-detail' mention.concept_id %}">Open concept</a>
+    </section>
+{% else %}
+    <section class="hero-card">
+        <div class="row">
+            <div class="grow">
+                <div class="page-kicker">Logical block</div>
+                <h1>{{ logical_block.order_number }}. {{ logical_block.title }}</h1>
+                <p class="muted">{{ book.title|default:book.original_filename }} | {{ logical_block.chapter_title|default:"Chapter not set" }}</p>
+                <div class="book-meta">
+                    <span class="status-pill status-{{ book.status }}">{{ book.status }}</span>
+                    <span class="badge">block ID {{ logical_block.id }}</span>
+                    <span class="badge">paragraphs {{ logical_block.start_paragraph }}-{{ logical_block.end_paragraph }}</span>
+                    <span class="badge">tokens {{ logical_block.token_count }}</span>
+                </div>
             </div>
-        {% endfor %}
-    {% else %}
-        <p class="muted">No concepts for this block.</p>
+            <div class="action-bar">
+                {% if from_map %}
+                    <a class="btn outline" href="{% url 'webui:concept-map' %}{% if theme_id or subtopic_id %}?theme={{ theme_id|default:'' }}&subtopic={{ subtopic_id|default:'' }}{% endif %}">Back to Semantic Map</a>
+                {% endif %}
+                <a class="btn gray" href="{% url 'webui:book-summary' book.id %}?block={{ logical_block.id }}#block-{{ logical_block.id }}">Back to book</a>
+                <a class="btn green" href="{% url 'webui:book-notes' book.id %}">Конспект всей книги</a>
+            </div>
+        </div>
+    </section>
+
+    {% if from_map %}
+        <section class="card context-box">
+            <h2>Opened from Semantic Theme Map</h2>
+            <div class="kv">
+                <strong>Theme</strong>
+                <span>{% if theme %}{{ theme.title }}{% elif theme_id %}ID {{ theme_id }}{% else %}-{% endif %}</span>
+                <strong>Subtopic</strong>
+                <span>{% if subtopic %}{{ subtopic.name }}{% elif subtopic_id %}ID {{ subtopic_id }}{% else %}-{% endif %}</span>
+                <strong>Linked block</strong>
+                <span>#{{ logical_block.order_number }} / ID {{ logical_block.id }}: {{ logical_block.title }}</span>
+            </div>
+            {% if subtopic %}
+                <p class="muted">This block is linked to the selected subtopic through the saved theme/source range in the semantic map.</p>
+            {% endif %}
+        </section>
     {% endif %}
-</div>
+
+    <div class="detail-grid">
+        <main class="stack">
+            <section class="card elevated">
+                <h2>Summary / Main Meaning</h2>
+                {% if section_analysis and section_analysis.summary %}
+                    <div class="summary-text">{{ section_analysis.summary|linebreaks }}</div>
+                {% elif logical_block.short_summary %}
+                    <div class="summary-text">{{ logical_block.short_summary|linebreaks }}</div>
+                {% else %}
+                    <p class="muted">No summary saved for this block.</p>
+                {% endif %}
+            </section>
+
+            <section class="card">
+                <div class="row">
+                    <div class="grow">
+                        <h2>Original Text / Source Fragment</h2>
+                        <p class="muted">Исходный фрагмент книги, к которому привязан logical block.</p>
+                    </div>
+                </div>
+                {% if logical_block.source_text %}
+                    <div class="source-box">{{ logical_block.source_text }}</div>
+                {% else %}
+                    <p class="muted">Source text is empty.</p>
+                {% endif %}
+            </section>
+
+            <section class="card">
+                <h2>Concept mentions</h2>
+                {% if mentions %}
+                    <div class="stack">
+                        {% for mention in mentions %}
+                            <article class="concept-card">
+                                <div class="card-title-row">
+                                    <h3>{{ mention.concept.name }}</h3>
+                                    <span class="badge">importance {{ mention.importance_score }}</span>
+                                </div>
+                                <div class="summary-text">{{ mention.custom_explanation|default:mention.short_explanation|linebreaks }}</div>
+                                {% if mention.source_quote %}
+                                    <div class="alert info pre">{{ mention.source_quote }}</div>
+                                {% endif %}
+                                <a class="btn outline" href="{% url 'webui:concept-detail' mention.concept_id %}">Open concept</a>
+                            </article>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="empty-state"><p class="muted">No concept mentions attached to this block.</p></div>
+                {% endif %}
+            </section>
+        </main>
+
+        <aside class="stack">
+            <section class="card">
+                <h2>Block meta</h2>
+                <div class="kv">
+                    <strong>ID</strong><span>{{ logical_block.id }}</span>
+                    <strong>Order</strong><span>{{ logical_block.order_number }}</span>
+                    <strong>Paragraphs</strong><span>{{ logical_block.start_paragraph }}-{{ logical_block.end_paragraph }}</span>
+                    <strong>Tokens</strong><span>{{ logical_block.token_count }}</span>
+                    <strong>Theme</strong><span>{% if theme %}{{ theme.title }}{% else %}-{% endif %}</span>
+                    <strong>Subtopic</strong><span>{% if subtopic %}{{ subtopic.name }}{% else %}-{% endif %}</span>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2>Terms</h2>
+                {% if block_terms %}
+                    <div class="pill-list">
+                        {% for term in block_terms %}<span class="pill">{{ term }}</span>{% endfor %}
+                    </div>
+                {% else %}
+                    <p class="muted">No terms found.</p>
+                {% endif %}
+            </section>
+
+            <section class="card">
+                <h2>Subtopics</h2>
+                {% if block_subtopics %}
+                    <div class="pill-list">
+                        {% for item in block_subtopics %}<span class="pill">{{ item }}</span>{% endfor %}
+                    </div>
+                {% else %}
+                    <p class="muted">No subtopics found.</p>
+                {% endif %}
+            </section>
+
+            <section class="card {% if quality_flags %}warning-box{% endif %}">
+                <h2>Quality / Status</h2>
+                {% if section_analysis %}
+                    <div class="kv">
+                        <strong>JSON valid</strong><span>{{ section_analysis.json_valid }}</span>
+                        <strong>Fallback</strong><span>{{ section_analysis.fallback_used }}</span>
+                        <strong>Model</strong><span>{{ section_analysis.model_used|default:"-" }}</span>
+                    </div>
+                {% else %}
+                    <p class="muted">No section-level LLM analysis row found for this block.</p>
+                {% endif %}
+                {% if quality_flags %}
+                    <div class="pill-list" style="margin-top:12px;">
+                        {% for flag in quality_flags %}<span class="badge status-ready_with_warnings">{{ flag }}</span>{% endfor %}
+                    </div>
+                {% else %}
+                    <span class="badge status-ready">No warnings</span>
+                {% endif %}
+            </section>
+
+            <section class="card">
+                <h2>Actions</h2>
+                <div class="action-bar">
+                    <a class="btn" href="{% url 'webui:book-summary' book.id %}?block={{ logical_block.id }}#block-{{ logical_block.id }}">Open book</a>
+                    <a class="btn green" href="{% url 'webui:book-notes' book.id %}">Конспект всей книги</a>
+                    <form method="post" action="{% url 'webui:reanalyze-book' book.id %}">
+                        {% csrf_token %}
+                        <button class="btn outline" type="submit">Reanalyze book</button>
+                    </form>
+                </div>
+                <p class="muted">Block-level reanalysis route is not defined; this existing action reanalyzes the whole book.</p>
+            </section>
+        </aside>
+    </div>
+{% endif %}
 {% endblock %}

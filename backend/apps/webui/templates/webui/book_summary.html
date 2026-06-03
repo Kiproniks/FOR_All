@@ -1,116 +1,221 @@
 {% extends "webui/base.html" %}
 {% block title %}Book Summary{% endblock %}
 {% block content %}
-<div class="card">
+<nav class="breadcrumbs">
+    <a href="{% url 'webui:library' %}">Library</a>
+    <span>{{ book.title|default:book.original_filename }}</span>
+</nav>
+
+<section class="hero-card">
     <div class="row">
         <div class="grow">
+            <div class="page-kicker">Book analysis</div>
             <h1>{{ book.title|default:book.original_filename }}</h1>
-            <p class="muted">{{ book.authors|default:"Unknown" }} | views: {{ book.views_count }} | status: {{ book.status }}</p>
+            <p class="muted">{{ book.authors|default:"Unknown author" }} | views: {{ book.views_count }}</p>
+            <div class="book-meta">
+                <span class="status-pill status-{{ book.status }}">{{ book.status }}</span>
+                {% if book.analysis_mode %}<span class="badge">{{ book.analysis_mode }}</span>{% endif %}
+                {% if book.is_protected %}<span class="badge status-ready">Protected</span>{% endif %}
+            </div>
         </div>
-        <a class="btn gray" href="{% url 'webui:library' %}">Back</a>
+        <div class="action-bar">
+            <a class="btn gray" href="{% url 'webui:library' %}">Back to library</a>
+            <a class="btn outline" href="{% url 'webui:concept-map' %}">Semantic Map</a>
+            <a class="btn green" href="{% url 'webui:book-notes' book.id %}">Конспект всей книги</a>
+        </div>
     </div>
-</div>
+</section>
 
-<div class="card">
-    <h3>Export</h3>
+<section class="stat-grid">
+    <div class="metric-card">
+        <div class="metric-label">Themes</div>
+        <div class="metric-value">{{ themes|length }}</div>
+        <div class="muted">Крупные смысловые части</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Logical blocks</div>
+        <div class="metric-value">{{ blocks|length }}</div>
+        <div class="muted">Фрагменты исходного текста</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Concept mentions</div>
+        <div class="metric-value">{{ mentions|length }}</div>
+        <div class="muted">Связанные понятия</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Status</div>
+        <div class="metric-value" style="font-size:22px;">{{ book.status }}</div>
+        <div class="muted">Текущее состояние анализа</div>
+    </div>
+</section>
+
+{% if book.error_message %}
+    <section class="alert warning">{{ book.error_message }}</section>
+{% endif %}
+
+<section class="card elevated">
     <div class="row">
-        <a class="btn outline" href="{% url 'webui:export-book' book.id 'pdf' %}">PDF</a>
-        <a class="btn outline" href="{% url 'webui:export-book' book.id 'txt' %}">TXT</a>
-        <a class="btn outline" href="{% url 'webui:export-book' book.id 'csv' %}">CSV</a>
-        <a class="btn outline" href="{% url 'webui:export-book' book.id 'json' %}">JSON</a>
+        <div class="grow">
+            <h2>Actions</h2>
+            <p class="muted">Экспорт и быстрый переход к карте/конспекту.</p>
+        </div>
+        <div class="action-bar">
+            <a class="btn green" href="{% url 'webui:book-notes' book.id %}">Конспект всей книги</a>
+            <a class="btn outline" href="{% url 'webui:concept-map' %}">Open map</a>
+            <a class="btn outline" href="{% url 'webui:export-book' book.id 'pdf' %}">PDF</a>
+            <a class="btn outline" href="{% url 'webui:export-book' book.id 'txt' %}">TXT</a>
+            <a class="btn outline" href="{% url 'webui:export-book' book.id 'csv' %}">CSV</a>
+            <a class="btn outline" href="{% url 'webui:export-book' book.id 'json' %}">JSON</a>
+        </div>
     </div>
-</div>
+</section>
 
-<div class="card">
-    <h3>Book Summary</h3>
+<section class="card">
+    <h2>Book Summary</h2>
     {% if summary %}
-        <div class="pre">{{ summary }}</div>
+        <div class="summary-text">{{ summary|linebreaks }}</div>
     {% else %}
-        <p class="muted">Summary is empty. Analysis may still be processing or source text was not extracted.</p>
+        <div class="empty-state">
+            <h3>Summary is empty</h3>
+            <p class="muted">Analysis may still be processing or source text was not extracted.</p>
+        </div>
     {% endif %}
-</div>
+</section>
 
-<div class="card">
-    <h3>Themes ({{ themes|length }})</h3>
+<section class="card">
+    <div class="row">
+        <div class="grow">
+            <h2>Themes</h2>
+            <p class="muted">Крупные темы книги, связанные с диапазонами logical blocks.</p>
+        </div>
+    </div>
     {% if themes %}
-        {% for theme in themes %}
-            <div class="card">
-                <h4>{{ theme.order_number }}. {{ theme.title }}</h4>
-                <p class="muted">
-                    Chapter: {{ theme.chapter_title|default:"-" }} |
-                    blocks: {{ theme.start_block_number }}-{{ theme.end_block_number }} |
-                    paragraphs: {{ theme.start_paragraph }}-{{ theme.end_paragraph }}
-                </p>
-                <div class="pre">{{ theme.summary|default:"No theme summary." }}</div>
-                <h5>Subtopics</h5>
-                {% with subtopics=theme.subtopics.all %}
-                    {% if subtopics %}
-                        <ul>
-                            {% for sub in subtopics %}
-                                <li>
-                                    <strong>{{ sub.name }}</strong> — {{ sub.summary|default:"No summary." }}
-                                    {% if sub.source_quote %}
-                                        <div class="muted">Quote: {{ sub.source_quote }}</div>
-                                    {% endif %}
-                                </li>
+        <div class="section-grid">
+            {% for theme in themes %}
+                <article class="theme-card" id="theme-{{ theme.id }}" data-theme-id="{{ theme.id }}">
+                    <div class="card-title-row">
+                        <h3>{{ theme.order_number }}. {{ theme.title }}</h3>
+                        <span class="badge">blocks {{ theme.start_block_number }}-{{ theme.end_block_number }}</span>
+                    </div>
+                    <p class="muted">Chapter: {{ theme.chapter_title|default:"-" }} | paragraphs: {{ theme.start_paragraph }}-{{ theme.end_paragraph }}</p>
+                    <div class="summary-text">{{ theme.summary|default:"No theme summary."|linebreaks }}</div>
+                    {% with subtopics=theme.subtopics.all %}
+                        <div class="pill-list">
+                            {% for sub in subtopics|slice:":6" %}
+                                <span class="pill">{{ sub.name }}</span>
+                            {% empty %}
+                                <span class="badge">No subtopics</span>
                             {% endfor %}
-                        </ul>
-                    {% else %}
-                        <p class="muted">No subtopics.</p>
-                    {% endif %}
-                {% endwith %}
-            </div>
-        {% endfor %}
-    {% else %}
-        <p class="muted">No themes generated yet.</p>
-    {% endif %}
-</div>
-
-<div class="card">
-    <h3>Logical Blocks ({{ blocks|length }})</h3>
-    {% if blocks %}
-        {% for block in blocks %}
-            <div class="card">
-                <h4>{{ block.order_number }}. {{ block.title }}</h4>
-                <p class="muted">Chapter: {{ block.chapter_title|default:"-" }} | paragraphs: {{ block.start_paragraph }}-{{ block.end_paragraph }} | tokens: {{ block.token_count }}</p>
-                <p class="pre">{{ block.short_summary|default:"No short summary." }}</p>
-                <a class="btn" href="{% url 'webui:block-detail' book.id block.id %}">Open block</a>
-            </div>
-        {% endfor %}
-    {% else %}
-        <p class="muted">No logical blocks found for this book.</p>
-    {% endif %}
-</div>
-
-<div class="card">
-    <h3>Subtopic Mentions ({{ mentions|length }})</h3>
-    {% if mentions %}
-        <table>
-            <thead>
-            <tr>
-                <th>Concept</th>
-                <th>Explanation</th>
-                <th>Block</th>
-                <th>Score</th>
-            </tr>
-            </thead>
-            <tbody>
-            {% for mention in mentions %}
-                <tr>
-                    <td>{{ mention.concept.name }}</td>
-                    <td>{{ mention.short_explanation }}</td>
-                    <td>
-                        <a href="{% url 'webui:block-detail' book.id mention.logical_block_id %}">
-                            {{ mention.logical_block.title }}
-                        </a>
-                    </td>
-                    <td>{{ mention.importance_score }}</td>
-                </tr>
+                        </div>
+                    {% endwith %}
+                    <div class="action-bar" style="margin-top:12px;">
+                        <a class="btn outline" href="{% url 'webui:concept-map' %}?theme={{ theme.id }}">Open in map</a>
+                    </div>
+                </article>
             {% endfor %}
-            </tbody>
-        </table>
+        </div>
     {% else %}
-        <p class="muted">No concepts found.</p>
+        <div class="empty-state"><p class="muted">No themes generated yet.</p></div>
     {% endif %}
-</div>
+</section>
+
+<section class="card">
+    <div class="row">
+        <div class="grow">
+            <h2>Logical Blocks</h2>
+            <p class="muted">Смысловые фрагменты книги с кратким summary и ссылкой на исходный текст.</p>
+        </div>
+    </div>
+    {% if blocks %}
+        <div class="section-grid">
+            {% for block in blocks %}
+                <article class="block-card" id="block-{{ block.id }}" data-block-id="{{ block.id }}">
+                    <div class="card-title-row">
+                        <h3>{{ block.order_number }}. {{ block.title }}</h3>
+                        <span class="badge">ID {{ block.id }}</span>
+                    </div>
+                    <p class="muted">{{ block.chapter_title|default:"Chapter not set" }} | paragraphs {{ block.start_paragraph }}-{{ block.end_paragraph }} | tokens {{ block.token_count }}</p>
+                    <div class="summary-text">{{ block.short_summary|default:"No short summary."|linebreaks }}</div>
+                    {% if block.concept_candidates %}
+                        <div class="pill-list">
+                            {% for term in block.concept_candidates|slice:":5" %}
+                                <span class="pill">{{ term }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                    {% if block.semantic_data.quality_flags %}
+                        <div class="pill-list" style="margin-top:8px;">
+                            {% for flag in block.semantic_data.quality_flags %}<span class="badge status-ready_with_warnings">{{ flag }}</span>{% endfor %}
+                        </div>
+                    {% endif %}
+                    <div class="action-bar" style="margin-top:12px;">
+                        <a class="btn" href="{% url 'webui:block-detail' book.id block.id %}">Open block</a>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state"><p class="muted">No logical blocks found for this book.</p></div>
+    {% endif %}
+</section>
+
+<section class="card">
+    <div class="row">
+        <div class="grow">
+            <h2>Subtopic Mentions</h2>
+            <p class="muted">Компактный список понятий и блоков, где они раскрываются.</p>
+        </div>
+    </div>
+    {% if mentions %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                <tr>
+                    <th>Concept</th>
+                    <th>Explanation</th>
+                    <th>Block</th>
+                    <th>Score</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for mention in mentions %}
+                    <tr>
+                        <td><strong>{{ mention.concept.name }}</strong></td>
+                        <td>{{ mention.short_explanation|truncatechars:220 }}</td>
+                        <td><a href="{% url 'webui:block-detail' book.id mention.logical_block_id %}">{{ mention.logical_block.title }}</a></td>
+                        <td><span class="badge">{{ mention.importance_score }}</span></td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state"><p class="muted">No concepts found.</p></div>
+    {% endif %}
+</section>
+
+<script>
+(function () {
+    function targetFromLocation() {
+        const params = new URLSearchParams(window.location.search);
+        const blockId = params.get('block');
+        const themeId = params.get('theme');
+        if (blockId) return document.querySelector(`[data-block-id="${CSS.escape(blockId)}"]`);
+        if (themeId) return document.querySelector(`[data-theme-id="${CSS.escape(themeId)}"]`);
+        if (window.location.hash) return document.querySelector(window.location.hash);
+        return null;
+    }
+
+    window.addEventListener('load', function () {
+        const target = targetFromLocation();
+        if (!target) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('highlighted-block');
+        setTimeout(function () {
+            target.classList.remove('highlighted-block');
+            target.classList.add('soft-highlighted-block');
+        }, 3000);
+    });
+})();
+</script>
 {% endblock %}

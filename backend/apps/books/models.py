@@ -23,9 +23,37 @@ class GlobalBookCache(models.Model):
 class UserBook(models.Model):
     class Status(models.TextChoices):
         UPLOADED = "uploaded", "Uploaded"
+        QUEUED = "queued", "Queued"
         PROCESSING = "processing", "Processing"
+        PARSING = "parsing", "Parsing"
+        STRUCTURE_DETECTION = "structure_detection", "Structure Detection"
+        FILTERING = "filtering", "Filtering"
+        CHUNKING = "chunking", "Chunking"
+        LLM_SECTION_ANALYSIS = "llm_section_analysis", "LLM Section Analysis"
+        LLM_CHAPTER_ANALYSIS = "llm_chapter_analysis", "LLM Chapter Analysis"
+        LLM_BOOK_ANALYSIS = "llm_book_analysis", "LLM Book Analysis"
+        LLM_FAST_BATCHED_SECTION_ANALYSIS = (
+            "llm_fast_batched_section_analysis",
+            "LLM Fast Batched Section Analysis",
+        )
+        LLM_FAST_BATCHED_CHAPTER_ANALYSIS = (
+            "llm_fast_batched_chapter_analysis",
+            "LLM Fast Batched Chapter Analysis",
+        )
+        LLM_FAST_BATCHED_BOOK_ANALYSIS = (
+            "llm_fast_batched_book_analysis",
+            "LLM Fast Batched Book Analysis",
+        )
+        BUILDING_MAP = "building_map", "Building Map"
+        SAVING_RESULTS = "saving_results", "Saving Results"
         READY = "ready", "Ready"
+        READY_WITH_WARNINGS = "ready_with_warnings", "Ready with Warnings"
+        PARTIAL_READY = "partial_ready", "Partial Ready"
         FAILED = "failed", "Failed"
+        FAILED_TIMEOUT = "failed_timeout", "Failed Timeout"
+        CANCELLED = "cancelled", "Cancelled"
+        DEBUG_PREVIEW = "debug_preview", "Debug Preview"
+        HEURISTIC_PREVIEW = "heuristic_preview", "Heuristic Preview"
 
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="books")
     global_cache = models.ForeignKey(
@@ -40,11 +68,23 @@ class UserBook(models.Model):
     original_filename = models.CharField(max_length=512)
     file_hash = models.CharField(max_length=64, db_index=True)
     file = models.FileField(upload_to="books/%Y/%m/%d/", null=True, blank=True)
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.UPLOADED)
+    status = models.CharField(max_length=64, choices=Status.choices, default=Status.UPLOADED)
+    current_stage = models.CharField(max_length=64, blank=True, default="uploaded")
+    progress_percent = models.PositiveSmallIntegerField(default=0)
     error_message = models.TextField(blank=True)
     is_protected = models.BooleanField(default=False)
     views_count = models.PositiveIntegerField(default=0)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    last_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    llm_provider_used = models.CharField(max_length=64, blank=True, default="")
+    llm_model_used = models.CharField(max_length=128, blank=True, default="")
+    llm_calls_total = models.PositiveIntegerField(default=0)
+    llm_failures_total = models.PositiveIntegerField(default=0)
+    fallback_used_count = models.PositiveIntegerField(default=0)
+    analysis_mode = models.CharField(max_length=32, blank=True, default="")
     processed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -56,12 +96,217 @@ class UserBook(models.Model):
 
     def mark_failed(self, message: str):
         self.status = UserBook.Status.FAILED
+        self.current_stage = self.current_stage or "failed"
+        self.progress_percent = min(self.progress_percent, 99)
         self.error_message = message[:2000]
+        self.finished_at = timezone.now()
+        self.last_heartbeat_at = timezone.now()
         self.processed_at = timezone.now()
-        self.save(update_fields=["status", "error_message", "processed_at"])
+        self.save(
+            update_fields=[
+                "status",
+                "current_stage",
+                "progress_percent",
+                "error_message",
+                "finished_at",
+                "last_heartbeat_at",
+                "processed_at",
+                "updated_at",
+            ]
+        )
+
+    def bump_heartbeat(self):
+        self.last_heartbeat_at = timezone.now()
+        self.save(update_fields=["last_heartbeat_at", "updated_at"])
 
     def __str__(self):
         return f"{self.user_id}: {self.title or self.original_filename}"
+
+
+class LLMAnalysisRun(models.Model):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        READY = "ready", "Ready"
+        PARTIAL_READY = "partial_ready", "Partial Ready"
+        FAILED = "failed", "Failed"
+        FAILED_TIMEOUT = "failed_timeout", "Failed Timeout"
+        DRY_RUN = "dry_run", "Dry Run"
+
+    global_book = models.ForeignKey(GlobalBookCache, on_delete=models.CASCADE, related_name="llm_analysis_runs")
+    user_book = models.ForeignKey(
+        UserBook,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="llm_analysis_runs",
+    )
+    analysis_run_id = models.CharField(max_length=64, unique=True, db_index=True)
+    mode = models.CharField(max_length=64, default="llm_fast_batched")
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.QUEUED)
+    current_batch_index = models.PositiveIntegerField(default=0)
+    current_offset = models.PositiveIntegerField(default=0)
+    batch_size = models.PositiveIntegerField(default=10)
+    sections_total = models.PositiveIntegerField(default=0)
+    sections_processed = models.PositiveIntegerField(default=0)
+    chapters_processed = models.PositiveIntegerField(default=0)
+    llm_calls_actual = models.PositiveIntegerField(default=0)
+    cache_hits = models.PositiveIntegerField(default=0)
+    fallback_count = models.PositiveIntegerField(default=0)
+    timeout_count = models.PositiveIntegerField(default=0)
+    valid_json_units = models.PositiveIntegerField(default=0)
+    expected_json_units = models.PositiveIntegerField(default=0)
+    progress_percent = models.PositiveSmallIntegerField(default=0)
+    output_dir = models.CharField(max_length=1024, blank=True)
+    final_report = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    last_heartbeat_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=("global_book", "mode", "status")),
+            models.Index(fields=("user_book", "status")),
+            models.Index(fields=("last_heartbeat_at",)),
+        ]
+
+    def __str__(self):
+        return f"{self.mode}:{self.global_book_id}:{self.status}:{self.analysis_run_id}"
+
+
+class LLMSectionAnalysis(models.Model):
+    global_book = models.ForeignKey(GlobalBookCache, on_delete=models.CASCADE, related_name="llm_section_analyses")
+    analysis_run = models.ForeignKey(
+        LLMAnalysisRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="section_results",
+    )
+    mode = models.CharField(max_length=64, default="llm_fast_batched")
+    chapter_title = models.CharField(max_length=512, blank=True)
+    section_title = models.CharField(max_length=512)
+    section_index = models.PositiveIntegerField()
+    start_paragraph = models.PositiveIntegerField(default=0)
+    end_paragraph = models.PositiveIntegerField(default=0)
+    word_count = models.PositiveIntegerField(default=0)
+    summary = models.TextField(blank=True)
+    terms = models.JSONField(default=list, blank=True)
+    subtopics = models.JSONField(default=list, blank=True)
+    model_used = models.CharField(max_length=128, blank=True)
+    prompt_version = models.CharField(max_length=64, default="v1")
+    content_hash = models.CharField(max_length=64, db_index=True)
+    json_valid = models.BooleanField(default=False)
+    fallback_used = models.BooleanField(default=False)
+    timeout = models.BooleanField(default=False)
+    quality_flags = models.JSONField(default=list, blank=True)
+    cache_hit = models.BooleanField(default=False)
+    actual_llm_call = models.BooleanField(default=False)
+    duration_seconds = models.FloatField(default=0.0)
+    input_chars = models.PositiveIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("section_index",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("global_book", "mode", "content_hash", "prompt_version", "model_used"),
+                name="uniq_llm_section_content_model",
+            )
+        ]
+        indexes = [
+            models.Index(fields=("global_book", "section_index")),
+            models.Index(fields=("global_book", "mode", "json_valid")),
+        ]
+
+    def __str__(self):
+        return f"{self.global_book_id}:{self.section_index}:{self.section_title}"
+
+
+class LLMChapterAnalysis(models.Model):
+    global_book = models.ForeignKey(GlobalBookCache, on_delete=models.CASCADE, related_name="llm_chapter_analyses")
+    analysis_run = models.ForeignKey(
+        LLMAnalysisRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chapter_results",
+    )
+    mode = models.CharField(max_length=64, default="llm_fast_batched")
+    chapter_title = models.CharField(max_length=512)
+    chapter_index = models.PositiveIntegerField(default=0)
+    chapter_summary = models.TextField(blank=True)
+    main_topics = models.JSONField(default=list, blank=True)
+    key_terms = models.JSONField(default=list, blank=True)
+    sections_count = models.PositiveIntegerField(default=0)
+    source_section_ids = models.JSONField(default=list, blank=True)
+    model_used = models.CharField(max_length=128, blank=True)
+    prompt_version = models.CharField(max_length=64, default="v1")
+    content_hash = models.CharField(max_length=64, db_index=True)
+    json_valid = models.BooleanField(default=False)
+    fallback_used = models.BooleanField(default=False)
+    timeout = models.BooleanField(default=False)
+    quality_flags = models.JSONField(default=list, blank=True)
+    cache_hit = models.BooleanField(default=False)
+    actual_llm_call = models.BooleanField(default=False)
+    duration_seconds = models.FloatField(default=0.0)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("chapter_index", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("global_book", "mode", "content_hash", "prompt_version", "model_used"),
+                name="uniq_llm_chapter_content_model",
+            )
+        ]
+        indexes = [
+            models.Index(fields=("global_book", "chapter_index")),
+        ]
+
+    def __str__(self):
+        return f"{self.global_book_id}:{self.chapter_index}:{self.chapter_title}"
+
+
+class LLMBookAnalysis(models.Model):
+    global_book = models.OneToOneField(GlobalBookCache, on_delete=models.CASCADE, related_name="llm_book_analysis")
+    analysis_run = models.ForeignKey(
+        LLMAnalysisRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="book_results",
+    )
+    mode = models.CharField(max_length=64, default="llm_fast_batched")
+    book_summary = models.TextField(blank=True)
+    global_themes = models.JSONField(default=list, blank=True)
+    learning_path = models.JSONField(default=list, blank=True)
+    model_used = models.CharField(max_length=128, blank=True)
+    prompt_version = models.CharField(max_length=64, default="v1")
+    chapters_count = models.PositiveIntegerField(default=0)
+    sections_count = models.PositiveIntegerField(default=0)
+    content_hash = models.CharField(max_length=64, db_index=True)
+    json_valid = models.BooleanField(default=False)
+    fallback_used = models.BooleanField(default=False)
+    timeout = models.BooleanField(default=False)
+    quality_flags = models.JSONField(default=list, blank=True)
+    cache_hit = models.BooleanField(default=False)
+    actual_llm_call = models.BooleanField(default=False)
+    duration_seconds = models.FloatField(default=0.0)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.global_book_id}:{self.mode}:{self.json_valid}"
 
 
 class LogicalBlock(models.Model):
@@ -75,6 +320,10 @@ class LogicalBlock(models.Model):
     chapter_title = models.CharField(max_length=512, blank=True)
     embedding_id = models.CharField(max_length=255, null=True, blank=True)
     token_count = models.PositiveIntegerField(default=0)
+    semantic_data = models.JSONField(null=True, blank=True)
+    source_sentence_ids = models.JSONField(null=True, blank=True)
+    concept_candidates = models.JSONField(null=True, blank=True)
+    thought_cluster_ids = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -145,6 +394,31 @@ class BookSummary(models.Model):
 
     def __str__(self):
         return f"summary:{self.global_book_id}"
+
+
+class BookStudyNotes(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        GENERATING = "generating", "Generating"
+        READY = "ready", "Ready"
+        FAILED = "failed", "Failed"
+
+    book = models.OneToOneField(UserBook, on_delete=models.CASCADE, related_name="study_notes")
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING)
+    content_markdown = models.TextField(blank=True)
+    model_name = models.CharField(max_length=100, blank=True)
+    source_run = models.ForeignKey(LLMAnalysisRun, null=True, blank=True, on_delete=models.SET_NULL)
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=("book", "status")),
+        ]
+
+    def __str__(self):
+        return f"notes:{self.book_id}:{self.status}"
 
 
 class BookTheme(models.Model):

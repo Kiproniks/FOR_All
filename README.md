@@ -1,126 +1,116 @@
-﻿# Intelligent Library (Python-only Web UI)
+# FOR_All / Book Semantic Analyzer
 
-This project is now focused on Python-only runtime components:
-- Django backend (API + server-rendered web UI)
-- Celery background processing
+## Описание
+
+FOR_All — учебный Django-проект для интеллектуального анализа книг. Система позволяет:
+
+- загружать книги FB2/PDF;
+- проверять размер и валидность файла;
+- разбирать структуру книги на главы, секции и logical blocks;
+- запускать production-safe LLM-анализ в режиме `llm_fast_batched`;
+- строить Semantic Theme Map;
+- открывать конкретные logical blocks и видеть исходный фрагмент текста;
+- смотреть concepts/subtopics, связанные с блоками;
+- формировать конспект всей книги из уже готовых результатов анализа;
+- экспортировать результат в PDF/TXT/CSV/JSON.
+
+Проект сейчас работает как Python/Django web-приложение с server-rendered UI. React/Vite для запуска текущей версии не требуется.
+
+## Возможности
+
+- Загрузка FB2/PDF книг через веб-интерфейс.
+- Глобальный кэш анализа по SHA-256 книги.
+- Батчевый LLM-анализ `llm_fast_batched` с checkpoint/resume.
+- Structure detection: отделение основного текста от front matter/service sections.
+- Logical blocks: смысловые фрагменты книги с source text.
+- Themes/Subtopics/ConceptMentions: крупные темы, подтемы и понятия.
+- Semantic Theme Map: граф книг, тем и подтем с переходом к source block.
+- Book Notes: конспект всей книги на основе уже сохранённых summary/themes/blocks/concepts.
+- Quality audit и статус `ready_with_warnings` для non-fatal проблем.
+- Telegram bot scaffold через aiogram.
+
+## Стек
+
+- Python / Django
+- Django REST Framework
 - PostgreSQL
 - Redis
-- aiogram Telegram bot
-- Optional Ollama for LLM mode
+- Celery
+- Ollama
+- qwen2.5:1.5b
+- lxml, pypdf, razdel, pymorphy3
+- ChromaDB / sentence-transformers для embedding/RAG-части
 
-The React/Vite frontend is no longer required to run the project.
+## Требования
 
-## What the system does
+- Python 3.12+ recommended. Проект также проверялся локально на Python 3.13.
+- PostgreSQL 16 или совместимый.
+- Redis 7 или совместимый.
+- Ollama для LLM-анализа.
+- Git.
+- Windows PowerShell для команд из quick start.
 
-1. Uploads FB2/PDF books.
-2. Validates XML and file size (max 50 MB).
-3. Computes SHA-256 hash and reuses global cache for duplicate books.
-4. Splits text into logical blocks.
-5. Groups blocks into major themes.
-6. Extracts 2-4 subtopics for each theme.
-7. Stores concept mentions linked to source blocks.
-8. Builds full book summary.
-9. Supports concept search and concept comparison across user books.
-10. Exports analysis to PDF/TXT/CSV/JSON.
-11. Builds an interactive concept/subtheme map with filters and drill-down.
+## Быстрый запуск
 
-## Python-only web interface
+Подробная инструкция для Windows находится в [QUICK_START_WINDOWS.md](./QUICK_START_WINDOWS.md).
 
-Main pages are implemented as Django templates:
-- `/login/`
-- `/register/`
-- `/library/`
-- `/library/books/<book_id>/`
-- `/library/books/<book_id>/blocks/<block_id>/`
-- `/library/concepts/`
-- `/library/concepts/<concept_id>/`
-- `/library/concepts/<concept_id>/compare/`
-- `/library/map/`
-
-## Smart semantic split (chapter -> logical thoughts)
-
-The pipeline now splits text in two levels:
-1. Structural chapters from source (`FB2 section/title` or `PDF page` fallback).
-2. Semantic logical blocks inside each chapter using:
-   - paragraph embeddings,
-   - cosine drop points between neighboring paragraphs,
-   - transition cue words,
-   - minimum/target/maximum block size constraints.
-
-Tuning variables in `.env`:
-- `BLOCK_MIN_WORDS`
-- `BLOCK_TARGET_WORDS`
-- `BLOCK_MAX_WORDS`
-
-## Core models
-
-- `GlobalBookCache`
-- `UserBook`
-- `LogicalBlock`
-- `BookTheme`
-- `ThemeSubtopic`
-- `Concept`
-- `ConceptMention`
-- `UserConceptEdit`
-- `BookSummary`
-
-Legacy glossary models are kept only for migration compatibility.
-
-## API (kept and working)
-
-Auth:
-- `POST /api/auth/register/`
-- `POST /api/auth/login/`
-- `POST /api/auth/logout/`
-- `GET /api/auth/me/`
-
-Books:
-- `GET /api/books/`
-- `POST /api/books/upload/`
-- `GET /api/books/{id}/`
-- `DELETE /api/books/{id}/`
-- `POST /api/books/{id}/protect/`
-- `POST /api/books/{id}/reanalyze/`
-- `GET /api/books/{id}/summary/`
-- `GET /api/books/{id}/blocks/`
-- `GET /api/books/{id}/blocks/{block_id}/`
-- `GET /api/books/{id}/concepts/`
-- `GET /api/books/{id}/export/?format=pdf|txt|csv|json`
-
-Concepts:
-- `GET /api/concepts/`
-- `GET /api/concepts/search/?q=...`
-- `GET /api/concepts/{concept_id}/`
-- `GET /api/concepts/{concept_id}/compare/`
-- `PATCH /api/concepts/mentions/{mention_id}/edit/`
-- `POST /api/concepts/mentions/{mention_id}/reset/`
-
-Stats:
-- `GET /api/stats/`
-
-## Environment
-
-Copy `.env.example` to `.env` and set values.
-
-Important vars:
-- `DATABASE_URL` or `POSTGRES_*`
-- `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
-- `LLM_PROVIDER`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`
-- `VECTOR_STORE`, `CHROMA_PATH`, `EMBEDDING_MODEL`
-- `TELEGRAM_BOT_TOKEN`
-
-## Run with local PostgreSQL/Redis
+Минимально:
 
 ```powershell
-cd backend
+git clone https://github.com/Kiproniks/FOR_All.git
+cd FOR_All\backend
 python -m venv venv
 .\venv\Scripts\activate
 pip install -r requirements.txt
+copy ..\.env.example ..\.env
 python manage.py migrate
-python manage.py runserver
+python manage.py createsuperuser
+python manage.py runserver 127.0.0.1:8000
 ```
 
-In a second terminal:
+Открыть:
+
+```text
+http://127.0.0.1:8000/login/
+```
+
+## Основные команды
+
+### PostgreSQL/Redis через Docker
+
+В корне проекта:
+
+```powershell
+docker compose up -d postgres redis
+```
+
+Важно: в `docker-compose.yml` PostgreSQL проброшен на `15432`, Redis на `16379`.
+Для Docker-варианта в `.env` удобно использовать:
+
+```env
+DATABASE_URL=postgres://smart_user:smart_password@127.0.0.1:15432/smart_library
+REDIS_URL=redis://127.0.0.1:16379/0
+CELERY_BROKER_URL=redis://127.0.0.1:16379/0
+CELERY_RESULT_BACKEND=redis://127.0.0.1:16379/0
+```
+
+### Миграции
+
+```powershell
+cd backend
+.\venv\Scripts\activate
+python manage.py migrate
+```
+
+### Django web
+
+```powershell
+cd backend
+.\venv\Scripts\activate
+python manage.py runserver 127.0.0.1:8000
+```
+
+### Celery worker
 
 ```powershell
 cd backend
@@ -128,37 +118,172 @@ cd backend
 celery -A config worker -l info --pool=solo
 ```
 
-Open web UI:
-- `http://127.0.0.1:8000/login/`
+На Windows `--pool=solo` обычно стабильнее.
 
-## Run DB/Redis with Docker (optional)
-
-If Docker is installed:
+### Ollama
 
 ```powershell
-docker compose up -d postgres redis
-```
-
-## Ollama (optional)
-
-```bash
 ollama pull qwen2.5:1.5b
+ollama list
 ```
 
-If Ollama is unavailable, fallback logic is used and the project still works.
+Если Ollama не запущена автоматически:
 
-## Telegram bot
+```powershell
+ollama serve
+```
+
+## Структура проекта
+
+```text
+backend/
+  manage.py
+  config/
+    settings.py
+    urls.py
+    celery.py
+  apps/
+    accounts/       # custom user/auth
+    books/          # models, API, analysis services, management commands
+    webui/          # server-rendered UI templates/static
+    telegram_bot/   # aiogram bot scaffold
+  requirements.txt
+
+docker-compose.yml
+.env.example
+README.md
+QUICK_START_WINDOWS.md
+```
+
+Ключевые сервисы анализа находятся в `backend/apps/books/services/`:
+
+- `book_parser.py`, `fb2_parser.py`, `pdf_parser.py`
+- `structure_detector.py`
+- `content_filter.py`
+- `logical_block_splitter.py`
+- `llm_service.py`
+- `llm_hierarchical_pipeline.py`
+- `theme_hierarchy.py`
+- `concept_map.py`
+- `semantic_quality_v2.py`
+- `study_notes.py`
+
+Management commands находятся в `backend/apps/books/management/commands/`.
+
+## Важные URL
+
+- `/login/` — вход.
+- `/register/` — регистрация.
+- `/library/` — библиотека пользователя.
+- `/library/map/` — Semantic Theme Map.
+- `/library/books/<id>/` — страница книги.
+- `/library/books/<id>/notes/` — конспект всей книги.
+- `/library/books/<id>/blocks/<block_id>/` — конкретный logical block.
+- `/library/concepts/` — общий список concepts.
+
+## LLM-анализ
+
+Основной production-safe режим: `llm_fast_batched`.
+
+Он работает батчами, сохраняет промежуточные результаты в БД, умеет делать semantic audit и не должен запускаться одним огромным запросом.
+
+### Полный batched-анализ книги
 
 ```powershell
 cd backend
 .\venv\Scripts\activate
-python -m apps.telegram_bot.bot
+python manage.py run_llm_fast_batched_analysis --file "C:\path\book.fb2" --batch-size 5
 ```
 
-## Tests
+### Fresh run без использования старого LLM-кэша
 
 ```powershell
-cd backend
-.\venv\Scripts\activate
-python manage.py test
+python manage.py run_llm_fast_batched_analysis --file "C:\path\book.fb2" --batch-size 5 --force-llm-refresh
 ```
+
+### Semantic audit без нового анализа
+
+```powershell
+python manage.py run_llm_fast_batched_analysis --file "C:\path\book.fb2" --semantic-audit-only
+```
+
+### Repair fatal blocks only
+
+```powershell
+python manage.py run_llm_fast_batched_analysis --file "C:\path\book.fb2" --reanalyze-problem-blocks-only --fatal-only
+```
+
+### Segmentation mini-test без full analysis
+
+```powershell
+python manage.py test_book_segmentation --file "C:\path\book.fb2" --limit-main-sections 3 --output segmentation_mini_report
+```
+
+### Debug structure без LLM
+
+```powershell
+python manage.py analyze_book_debug --file "C:\path\book.fb2" --limit-sections 10 --mode debug_structure --show-quality --show-filtered --no-llm
+```
+
+## Статусы книги
+
+- `ready` — анализ готов.
+- `ready_with_warnings` — анализ готов, есть non-fatal warnings.
+- `partial_ready` — частичный результат, fallback/timeout были существенными.
+- `processing` / `llm_fast_batched_*` — анализ выполняется.
+- `failed` / `failed_timeout` — анализ завершился ошибкой.
+
+## Troubleshooting
+
+### PostgreSQL connection refused
+
+Проверьте, что PostgreSQL запущен и `.env` указывает правильный порт. Для Docker compose порт `15432`, не `5432`.
+
+### Redis connection error
+
+Проверьте Redis. Для Docker compose порт `16379`, не `6379`.
+
+### Ollama model not found
+
+```powershell
+ollama pull qwen2.5:1.5b
+ollama list
+```
+
+### no such table
+
+Выполните миграции:
+
+```powershell
+python manage.py migrate
+```
+
+### static files not loading
+
+Для dev-сервера проверьте:
+
+```powershell
+python manage.py findstatic webui/css/library_ui.css
+```
+
+### port already in use
+
+Найдите процесс:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000
+```
+
+### test database permission denied
+
+Это проблема прав PostgreSQL на создание test database. Код менять не нужно: выдайте пользователю CREATEDB или запускайте тесты с пользователем, у которого есть такие права.
+
+## Что не входит в репозиторий
+
+- `.env` и любые реальные секреты.
+- `venv/`.
+- `backend/media/`.
+- локальные базы данных и dumps.
+- загруженные книги `.fb2/.pdf/.epub/.djvu`.
+- LLM/audit/debug отчёты.
+- `postgres_data/`, `run_logs/`, cache folders.

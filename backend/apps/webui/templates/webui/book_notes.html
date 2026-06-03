@@ -1,0 +1,72 @@
+{% extends "webui/base.html" %}
+{% block title %}Book Notes{% endblock %}
+{% block content %}
+<nav class="breadcrumbs">
+    <a href="{% url 'webui:library' %}">Library</a>
+    <a href="{% url 'webui:book-summary' book.id %}">{{ book.title|default:book.original_filename }}</a>
+    <span>Конспект</span>
+</nav>
+
+<section class="hero-card">
+    <div class="row">
+        <div class="grow">
+            <div class="page-kicker">Study document</div>
+            <h1>Конспект всей книги</h1>
+            <p class="muted">{{ book.title|default:book.original_filename }}</p>
+            <div class="book-meta">
+                <span class="status-pill status-{{ notes.status }}">{{ notes.status }}</span>
+                <span class="badge">model: {{ notes.model_name|default:"-" }}</span>
+                <span class="badge">updated {{ notes.updated_at|date:"Y-m-d H:i:s" }}</span>
+                {% if notes.source_run %}<span class="badge">run {{ notes.source_run.status }}</span>{% endif %}
+            </div>
+        </div>
+        <div class="action-bar">
+            <a class="btn gray" href="{% url 'webui:book-summary' book.id %}">Back to book</a>
+            <a class="btn outline" href="{% url 'webui:library' %}">Back to library</a>
+            <a class="btn outline" href="{% url 'webui:concept-map' %}">Semantic Map</a>
+            <form method="post" action="{% url 'webui:generate-book-notes' book.id %}">
+                {% csrf_token %}
+                <button class="btn green" type="submit">Regenerate notes</button>
+            </form>
+        </div>
+    </div>
+</section>
+
+{% if notes.error_message %}
+    <section class="alert danger">{{ notes.error_message }}</section>
+{% endif %}
+
+{% if notes.status == 'generating' %}
+    <section class="alert info">
+        Конспект генерируется. Страница обновится автоматически.
+    </section>
+    <script>setTimeout(function () { window.location.reload(); }, 5000);</script>
+{% elif notes.status == 'failed' %}
+    <section class="card warning-box">
+        <h2>Не удалось создать конспект</h2>
+        <p class="muted">Нажмите Regenerate notes, чтобы попробовать ещё раз. Основной анализ книги при этом не запускается заново.</p>
+    </section>
+{% elif notes.status == 'ready' %}
+    <div class="notes-layout">
+        <aside class="card notes-toc">
+            <h3>Навигация</h3>
+            <a href="#">О чём книга</a>
+            <a href="#">Карта глав</a>
+            <a href="#">Ключевые темы</a>
+            <a href="#">Основные понятия</a>
+            <a href="#">Шпаргалка</a>
+            <p class="muted">Конспект собран из уже готового анализа книги, без повторного LLM-прогона.</p>
+        </aside>
+        <section class="card notes-shell elevated">
+            <article class="prose">
+                {{ notes_html }}
+            </article>
+        </section>
+    </div>
+{% else %}
+    <section class="empty-state">
+        <h2>Конспект ещё не готов</h2>
+        <p class="muted">Откройте генерацию или повторите попытку позже.</p>
+    </section>
+{% endif %}
+{% endblock %}

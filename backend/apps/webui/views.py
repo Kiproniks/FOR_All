@@ -13,7 +13,17 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.accounts.models import User
-from apps.books.models import BookTheme, Concept, ConceptMention, LogicalBlock, UserBook, UserConceptEdit
+from apps.books.models import (
+    BookStudyNotes,
+    BookTheme,
+    Concept,
+    ConceptMention,
+    LLMSectionAnalysis,
+    LogicalBlock,
+    ThemeSubtopic,
+    UserBook,
+    UserConceptEdit,
+)
 from apps.books.services.book_parser import (
     is_supported_book_extension,
     parse_uploaded_book,
@@ -30,6 +40,7 @@ from apps.books.services.rotation import (
     get_user_books_count,
     rotate_books_if_needed,
 )
+from apps.books.services.study_notes import generate_book_study_notes, render_markdown_basic
 from apps.books.tasks import analyze_book_task
 from .forms import ConceptEditForm, LoginForm, RegisterForm
 
@@ -110,6 +121,8 @@ def library_view(request):
     )
     books_count = books.count()
     protected_count = books.filter(is_protected=True).count()
+    ready_count = books.filter(status__in=[UserBook.Status.READY, UserBook.Status.READY_WITH_WARNINGS]).count()
+    remaining_count = max(0, MAX_BOOKS_PER_USER - books_count)
     oldest_unprotected = get_oldest_unprotected_book(request.user) if books_count >= MAX_BOOKS_PER_USER else None
 
     for book in books:
@@ -127,6 +140,8 @@ def library_view(request):
             "books": books,
             "books_count": books_count,
             "protected_count": protected_count,
+            "ready_count": ready_count,
+            "remaining_count": remaining_count,
             "max_books": MAX_BOOKS_PER_USER,
             "oldest_unprotected": oldest_unprotected,
         },
@@ -317,14 +332,69 @@ def book_summary_view(request, book_id: int):
 @login_required(login_url="webui:login")
 def block_detail_view(request, book_id: int, block_id: int):
     book = _get_user_book_or_404(request, book_id)
+    from_map = request.GET.get("from") == "map"
+    theme_id = request.GET.get("theme")
+    subtopic_id = request.GET.get("subtopic")
     if not book.global_cache_id:
         messages.error(request, "Book is not analyzed yet.")
         return redirect("webui:book-summary", book_id=book.id)
 
-    block = get_object_or_404(
-        LogicalBlock.objects.filter(global_book_id=book.global_cache_id),
-        id=block_id,
+    block = (
+        LogicalBlock.objects.filter(global_book_id=book.global_cache_id, id=block_id)
+        .prefetch_related("concept_mentions__concept")
+        .first()
     )
+    if block is None:
+        return render(
+            request,
+            "webui/block_detail.html",
+            {
+                "book": book,
+                "block": None,
+                "logical_block": None,
+                "not_found_block_id": block_id,
+                "from_map": from_map,
+                "theme_id": theme_id,
+                "subtopic_id": subtopic_id,
+            },
+            status=404,
+        )
+
+    theme = None
+    if theme_id and str(theme_id).isdigit():
+        theme = BookTheme.objects.filter(id=int(theme_id), global_book_id=book.global_cache_id).first()
+    if theme is None:
+        theme = (
+            BookTheme.objects.filter(
+                global_book_id=book.global_cache_id,
+                start_block_number__lte=block.order_number,
+                end_block_number__gte=block.order_number,
+            )
+            .order_by("order_number", "id")
+            .first()
+        )
+
+    subtopic = None
+    if subtopic_id and str(subtopic_id).isdigit():
+        subtopic = (
+            ThemeSubtopic.objects.filter(id=int(subtopic_id), theme__global_book_id=book.global_cache_id)
+            .select_related("theme")
+            .first()
+        )
+
+    section_index = None
+    semantic_data = block.semantic_data if isinstance(block.semantic_data, dict) else {}
+    if str(semantic_data.get("section_index", "")).isdigit():
+        section_index = int(semantic_data["section_index"])
+
+    section_analysis = None
+    if section_index is not None:
+        section_analysis = (
+            LLMSectionAnalysis.objects.filter(global_book_id=book.global_cache_id, mode="llm_fast_batched", section_index=section_index)
+            .order_by("-updated_at", "-id")
+            .first()
+        )
+
     mentions = (
         ConceptMention.objects.filter(logical_block=block)
         .select_related("concept")
@@ -336,11 +406,80 @@ def block_detail_view(request, book_id: int, block_id: int):
     }
     for mention in mentions:
         mention.custom_explanation = edits_map.get(mention.id).custom_explanation if mention.id in edits_map else ""
+    block_terms = []
+    block_subtopics = []
+    quality_flags = []
+
+    def _display_item(value):
+        if isinstance(value, dict):
+            return (
+                value.get("term")
+                or value.get("title")
+                or value.get("name")
+                or value.get("text")
+                or value.get("summary")
+                or str(value)
+            )
+        return str(value)
+
+    if section_analysis:
+        block_terms = [_display_item(item) for item in list(section_analysis.terms or [])]
+        block_subtopics = [_display_item(item) for item in list(section_analysis.subtopics or [])]
+        quality_flags = list(section_analysis.quality_flags or [])
+    if not block_terms:
+        block_terms = [_display_item(item) for item in list(block.concept_candidates or [])[:12]]
+    if not block_subtopics:
+        block_subtopics = [mention.concept.name for mention in mentions[:8]]
     return render(
         request,
         "webui/block_detail.html",
-        {"book": book, "block": block, "mentions": mentions},
+        {
+            "book": book,
+            "block": block,
+            "logical_block": block,
+            "mentions": mentions,
+            "theme": theme,
+            "subtopic": subtopic,
+            "from_map": from_map,
+            "theme_id": theme_id,
+            "subtopic_id": subtopic_id,
+            "section_analysis": section_analysis,
+            "block_terms": block_terms,
+            "block_subtopics": block_subtopics,
+            "quality_flags": quality_flags,
+        },
     )
+
+
+@login_required(login_url="webui:login")
+def book_notes_view(request, book_id: int):
+    book = _get_user_book_or_404(request, book_id)
+    notes = getattr(book, "study_notes", None)
+    if notes is None or notes.status in {BookStudyNotes.Status.PENDING, BookStudyNotes.Status.FAILED}:
+        notes = generate_book_study_notes(book.id)
+
+    notes_html = render_markdown_basic(notes.content_markdown) if notes.content_markdown else ""
+    return render(
+        request,
+        "webui/book_notes.html",
+        {
+            "book": book,
+            "notes": notes,
+            "notes_html": notes_html,
+        },
+    )
+
+
+@login_required(login_url="webui:login")
+@require_POST
+def generate_book_notes_view(request, book_id: int):
+    book = _get_user_book_or_404(request, book_id)
+    notes = generate_book_study_notes(book.id, force=True)
+    if notes.status == BookStudyNotes.Status.READY:
+        messages.success(request, "Конспект всей книги готов.")
+    else:
+        messages.error(request, notes.error_message or "Не удалось создать конспект.")
+    return redirect("webui:book-notes", book_id=book.id)
 
 
 @login_required(login_url="webui:login")

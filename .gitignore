@@ -1,41 +1,114 @@
-﻿# Python
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.pyc
 *.so
 *.egg-info/
 .pytest_cache/
 .mypy_cache/
+.coverage
+htmlcov/
 
-# Virtualenvs
+# Virtual env
 venv/
 .venv/
+env/
+ENV/
 backend/venv/
+backend/.venv/
 
-# Django
+# Django / local runtime
+*.log
+local_settings.py
+db.sqlite3
 backend/db.sqlite3
+media/
 backend/media/
+staticfiles/
 backend/staticfiles/
 
-# Secrets
+# Environment / secrets
 .env
+.env.*
+!.env.example
 backend/.env
+backend/.env.*
 
-# IDE / OS
+# IDE
 .vscode/
 .idea/
 *.swp
 *.tmp
-Thumbs.db
-.DS_Store
 
-# Runtime logs/data
+# OS
+.DS_Store
+Thumbs.db
+
+# Celery / Redis / runtime
+celerybeat-schedule
+*.pid
 run_logs/
-postgres_data/
 chroma_db/
 backend/chroma_db/
 
-# Node (if added later)
+# Local PostgreSQL data
+postgres_data/
+
+# Reports / generated audit files
+FULL_ANALYSIS_REPORT.md
+ONE_BOOK_ANALYSIS_REPORT.json
+fast_full_batch_*.json
+fast_full_batch_*.md
+fast_full_batches_summary.json
+fast_full_batches_summary.md
+fast_limited_llm_full_*.json
+fast_limited_llm_full_*.md
+limited_llm_full_report.json
+limited_llm_full_report.md
+llm_aggregation_preview_report.json
+llm_aggregation_preview_report.md
+llm_fast_batched_audit_pack.md
+llm_fast_batched_dry_run_resume/
+llm_fast_batched_full_fresh_run_after_cleanup/
+llm_fast_batched_full_run*/
+llm_fast_batched_final_report.json
+llm_fast_batched_final_report.md
+llm_fast_batched_quality_v2_audit.json
+llm_fast_batched_quality_v2_audit.md
+llm_fast_batched_final_semantic_cleanup_audit.json
+llm_fast_batched_final_semantic_cleanup_audit.md
+llm_preview_report.json
+llm_preview_report.md
+llm_quality_v2_audit*/
+llm_quality_v2_final_audit/
+llm_quality_v2_retry*/
+llm_section_preview_report.json
+llm_section_preview_report.md
+segmentation_mini_report.json
+segmentation_mini_report.md
+final_semantic_cleanup_audit_before/
+final_semantic_cleanup_audit_final/
+final_semantic_cleanup_run*/
+final_semantic_cleanup_status/
+
+# Uploaded books / large local files
+*.fb2
+*.epub
+*.pdf
+*.djvu
+
+# Database dumps / backups
+*.dump
+*.sql
+*.bak
+*.backup
+
+# Node, if any
 node_modules/
 frontend/node_modules/
+dist/
+build/
+frontend/dist/
+frontend/build/

@@ -3,6 +3,7 @@ from rest_framework import serializers
 from apps.books.models import (
     Concept,
     ConceptMention,
+    LLMAnalysisRun,
     LogicalBlock,
     UserBook,
     UserConceptEdit,
@@ -12,6 +13,9 @@ from apps.books.models import (
 class UserBookSerializer(serializers.ModelSerializer):
     logical_blocks_count = serializers.SerializerMethodField()
     concepts_count = serializers.SerializerMethodField()
+    current_batch_index = serializers.SerializerMethodField()
+    sections_processed = serializers.SerializerMethodField()
+    sections_total = serializers.SerializerMethodField()
 
     class Meta:
         model = UserBook
@@ -20,10 +24,25 @@ class UserBookSerializer(serializers.ModelSerializer):
             "title",
             "authors",
             "status",
+            "current_stage",
+            "progress_percent",
+            "analysis_mode",
             "is_protected",
             "uploaded_at",
+            "started_at",
+            "updated_at",
+            "finished_at",
+            "last_heartbeat_at",
             "processed_at",
             "views_count",
+            "llm_provider_used",
+            "llm_model_used",
+            "llm_calls_total",
+            "llm_failures_total",
+            "fallback_used_count",
+            "current_batch_index",
+            "sections_processed",
+            "sections_total",
             "logical_blocks_count",
             "concepts_count",
         )
@@ -37,6 +56,26 @@ class UserBookSerializer(serializers.ModelSerializer):
         if not obj.global_cache_id:
             return 0
         return obj.global_cache.concept_mentions.count()
+
+    def _latest_run(self, obj):
+        if not obj.global_cache_id:
+            return None
+        cached: dict[int, LLMAnalysisRun] | None = self.context.get("latest_runs")
+        if cached is not None:
+            return cached.get(obj.id)
+        return obj.llm_analysis_runs.order_by("-created_at").first()
+
+    def get_current_batch_index(self, obj):
+        run = self._latest_run(obj)
+        return run.current_batch_index if run else None
+
+    def get_sections_processed(self, obj):
+        run = self._latest_run(obj)
+        return run.sections_processed if run else None
+
+    def get_sections_total(self, obj):
+        run = self._latest_run(obj)
+        return run.sections_total if run else None
 
 
 class LogicalBlockSerializer(serializers.ModelSerializer):
@@ -116,6 +155,10 @@ class LogicalBlockDetailSerializer(serializers.ModelSerializer):
             "chapter_title",
             "short_summary",
             "source_text",
+            "source_sentence_ids",
+            "concept_candidates",
+            "thought_cluster_ids",
+            "semantic_data",
             "concepts",
         )
 

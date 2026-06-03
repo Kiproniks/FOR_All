@@ -20,6 +20,22 @@ BAD_SINGLE_WORDS = {
     "тема",
     "автор",
 }
+BAD_PHRASES = {
+    "такой образ",
+    "данный случай",
+    "следующий раздел",
+    "эта глава",
+    "этот пример",
+    "другой способ",
+    "таким образом",
+    "в настоящее время",
+    "с одной стороны",
+    "с другой стороны",
+    "большое количество",
+    "основная проблема",
+    "важный вопрос",
+}
+SKIP_PARTS = {"PREP", "CONJ", "PRCL", "INTJ"}
 
 
 def normalize_concept_name(name: str) -> str:
@@ -29,6 +45,8 @@ def normalize_concept_name(name: str) -> str:
         if word.isdigit():
             continue
         parsed = morph.parse(word)[0]
+        if any(part in parsed.tag for part in SKIP_PARTS):
+            continue
         normalized_words.append(parsed.normal_form)
     return " ".join(normalized_words).strip()
 
@@ -43,6 +61,10 @@ def is_bad_concept(name: str) -> bool:
     if len(words) > 7:
         return True
     if len(words) == 1 and words[0] in BAD_SINGLE_WORDS:
+        return True
+    if cleaned in BAD_PHRASES:
+        return True
+    if any(cleaned.startswith(prefix) for prefix in ("этот ", "данный ", "такой ")):
         return True
     if cleaned.isdigit():
         return True

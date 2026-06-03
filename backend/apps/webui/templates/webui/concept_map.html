@@ -1,9 +1,12 @@
-﻿{% extends "webui/base.html" %}
+{% extends "webui/base.html" %}
 {% block title %}Semantic Theme Map{% endblock %}
+{% block body_class %}map-page{% endblock %}
+{% block wrap_class %}wide{% endblock %}
 {% block content %}
-<div class="card">
+<section class="hero-card">
     <div class="row">
         <div class="grow">
+            <div class="page-kicker">Semantic navigation</div>
             <h1>Semantic Theme Map</h1>
             <p class="muted">
                 Layer 1: books. Layer 2: major themes. Layer 3: subtopics inside a theme.
@@ -12,13 +15,13 @@
         </div>
         <a class="btn gray" href="{% url 'webui:library' %}">Back</a>
     </div>
-</div>
+</section>
 
 {% if map_payload.nodes %}
     {{ map_payload|json_script:"concept-map-data" }}
-    <div class="card" style="display:grid;grid-template-columns:300px 1fr 380px;gap:12px;">
-        <div style="border:1px solid #dbe0ea;border-radius:10px;padding:12px;overflow:auto;max-height:88vh;">
-            <h3 style="margin-top:0;">Filters</h3>
+    <div class="map-grid">
+        <div class="map-panel">
+            <h3>Filters</h3>
             <label for="mapQuery">Search</label>
             <input id="mapQuery" type="text" placeholder="Type book/theme/subtopic...">
 
@@ -27,6 +30,7 @@
                 <button type="button" class="btn gray" id="levelBack">Back Level</button>
                 <button type="button" class="btn outline" id="levelReset">Reset Level</button>
                 <button type="button" class="btn outline" id="viewReset">Reset View</button>
+                <button type="button" class="btn outline" id="fitView">Fit Nodes</button>
             </div>
             <div class="row" style="gap:8px;margin-top:8px;">
                 <button type="button" class="btn outline" id="zoomIn">+</button>
@@ -42,12 +46,12 @@
             <p class="muted" id="mapStats"></p>
         </div>
 
-        <div style="border:1px solid #dbe0ea;border-radius:10px;overflow:hidden;background:#f8fafc;">
-            <svg id="conceptMapSvg" viewBox="0 0 2600 1500" style="width:100%;height:88vh;background:#ffffff;cursor:grab;"></svg>
+        <div class="map-canvas-wrap">
+            <svg id="conceptMapSvg" class="map-canvas" viewBox="0 0 1200 760"></svg>
         </div>
 
-        <div style="border:1px solid #dbe0ea;border-radius:10px;padding:12px;overflow:auto;max-height:88vh;">
-            <h3 style="margin-top:0;">Detail</h3>
+        <div class="map-panel">
+            <h3>Detail</h3>
             <div id="detailPanel" class="muted">Click a book point to open themes.</div>
         </div>
     </div>
@@ -68,9 +72,13 @@
       const levelBackEl = document.getElementById('levelBack');
       const levelResetEl = document.getElementById('levelReset');
       const viewResetEl = document.getElementById('viewReset');
+      const fitViewEl = document.getElementById('fitView');
       const zoomInEl = document.getElementById('zoomIn');
       const zoomOutEl = document.getElementById('zoomOut');
       const bookFiltersEl = document.getElementById('bookFilters');
+      const VIEW_W = 1200;
+      const VIEW_H = 760;
+      svg.setAttribute('viewBox', `0 0 ${VIEW_W} ${VIEW_H}`);
 
       const nodeById = new Map(nodes.map(node => [node.id, node]));
       const containsEdges = edges.filter(edge => edge.type === 'contains');
@@ -90,15 +98,51 @@
         isDragging: false,
         dragStartX: 0,
         dragStartY: 0,
+        autoFitPending: true,
       };
-      const MIN_SCALE = 0.35;
+      const MIN_SCALE = 0.15;
       const MAX_SCALE = 4.0;
+      const LEVEL_LAYOUT = {
+        books: { linkDistance: 260, collision: 90 },
+        themes: { linkDistance: 310, collision: 72 },
+        subtopics: { linkDistance: 260, collision: 58 },
+      };
+      const LABEL_LIMITS = {
+        book: 32,
+        theme: 28,
+        subtopic: 24,
+        concept: 22,
+      };
 
       const viewportGroup = document.createElementNS(SVG_NS, 'g');
       svg.appendChild(viewportGroup);
 
       function esc(value) {
         return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      function shortLabel(text, max = 28) {
+        const value = String(text || '').replace(/\s+/g, ' ').trim();
+        if (value.length <= max) return value;
+        return `${value.slice(0, max).trim()}…`;
+      }
+
+      function labelForNode(node) {
+        const max = LABEL_LIMITS[node.type] || 24;
+        return shortLabel(node.label || node.name || node.title || '', max);
+      }
+
+      function nodeRadius(node) {
+        const base = Number(node.size || 12);
+        if (node.type === 'book') return Math.max(30, base);
+        if (node.type === 'theme') return Math.max(20, base);
+        return Math.max(13, base);
+      }
+
+      function nodeLabelSize(node) {
+        if (node.type === 'book') return 18;
+        if (node.type === 'theme') return 14;
+        return 12;
       }
 
       function checkbox(label, checked, onChange) {
@@ -214,6 +258,129 @@
         };
       }
 
+      function circlePositions(count, centerX, centerY, radius, startAngle = -Math.PI / 2) {
+        if (count <= 0) return [];
+        if (count === 1) return [[centerX, centerY]];
+        const result = [];
+        for (let index = 0; index < count; index += 1) {
+          const angle = startAngle + (Math.PI * 2 * index / count);
+          result.push([centerX + Math.cos(angle) * radius, centerY + Math.sin(angle) * radius]);
+        }
+        return result;
+      }
+
+      function ringPositions(count, centerX, centerY, firstRadius, perRing = 8) {
+        const result = [];
+        let remaining = count;
+        let offset = 0;
+        let ring = 0;
+        while (remaining > 0) {
+          const capacity = Math.min(remaining, perRing + ring * 4);
+          const radius = firstRadius + ring * 125;
+          const positions = circlePositions(capacity, centerX, centerY, radius, -Math.PI / 2 + ring * 0.28);
+          positions.forEach(pos => result.push(pos));
+          remaining -= capacity;
+          offset += capacity;
+          ring += 1;
+        }
+        return result;
+      }
+
+      function applyLayout(visibleNodes) {
+        const books = visibleNodes.filter(node => node.type === 'book');
+        const themes = visibleNodes.filter(node => node.type === 'theme');
+        const subtopics = visibleNodes.filter(node => node.type === 'subtopic');
+
+        if (state.level === 'books') {
+          const radius = books.length <= 1 ? 0 : Math.max(250, Math.min(390, 165 + books.length * 34));
+          const positions = circlePositions(books.length, VIEW_W / 2, VIEW_H / 2, radius);
+          books.forEach((node, index) => {
+            node.x = positions[index][0];
+            node.y = positions[index][1];
+          });
+          return;
+        }
+
+        if (state.level === 'themes') {
+          if (books.length === 1) {
+            const book = books[0];
+            book.x = VIEW_W / 2;
+            book.y = VIEW_H / 2;
+            const radius = themes.length <= 4 ? 250 : Math.min(340, 225 + themes.length * 16);
+            const positions = circlePositions(themes.length, book.x, book.y, radius);
+            themes.forEach((node, index) => {
+              node.x = positions[index][0];
+              node.y = positions[index][1];
+            });
+            return;
+          }
+
+          const bookPositions = circlePositions(books.length, VIEW_W / 2, VIEW_H / 2, 330);
+          books.forEach((book, index) => {
+            book.x = bookPositions[index][0];
+            book.y = bookPositions[index][1];
+            const ownThemes = themes.filter(theme => theme.parent_id === book.id);
+            const positions = circlePositions(ownThemes.length, book.x, book.y, 185);
+            ownThemes.forEach((theme, themeIndex) => {
+              theme.x = positions[themeIndex][0];
+              theme.y = positions[themeIndex][1];
+            });
+          });
+          return;
+        }
+
+        const focusTheme = themes.find(node => node.id === state.focusedThemeId) || themes[0];
+        if (focusTheme) {
+          focusTheme.x = VIEW_W / 2;
+          focusTheme.y = VIEW_H / 2;
+        }
+        const parentBook = books[0];
+        if (parentBook) {
+          parentBook.x = 130;
+          parentBook.y = 95;
+        }
+        if (focusTheme) {
+          const positions = ringPositions(subtopics.length, focusTheme.x, focusTheme.y, 255, 8);
+          subtopics.forEach((node, index) => {
+            node.x = positions[index][0];
+            node.y = positions[index][1];
+          });
+        }
+      }
+
+      function blockActionsHtml(node, options = {}) {
+        const links = Array.isArray(node.block_links) ? node.block_links : [];
+        if (links.length === 0 && !node.open_url) {
+          return '<span class="badge" title="This item has no stable logical block id.">No linked block</span>';
+        }
+
+        if (links.length <= 1) {
+          const href = links[0]?.open_url || node.open_url;
+          const title = links[0]?.block_title || node.block_title || 'Logical block';
+          const index = links[0]?.block_index || node.block_index || '';
+          return `<a class="btn outline" href="${esc(href)}" title="${esc(title)}">Open block${index ? ` #${esc(index)}` : ''}</a>`;
+        }
+
+        if (options.compact) {
+          const first = links[0];
+          return `<a class="btn outline" href="${esc(first.open_url)}" title="${esc(first.block_title)}">Open block #${esc(first.block_index)}</a>`;
+        }
+
+        return `
+          <div class="card map-detail-card">
+            <strong>Linked blocks</strong>
+            <ul class="detail-list">
+              ${links.map(item => `
+                <li>
+                  <a href="${esc(item.open_url)}">Open block #${esc(item.block_index)}</a>
+                  <span class="muted">${esc(item.block_title)} | p${esc(item.source_start)}-${esc(item.source_end)}</span>
+                </li>
+              `).join('')}
+            </ul>
+          </div>
+        `;
+      }
+
       function renderDetail(node) {
         if (!node) {
           detailPanel.innerHTML = '<p class="muted">Click a point on the map.</p>';
@@ -223,8 +390,13 @@
         if (node.type === 'book') {
           detailPanel.innerHTML = `
             <div class="card">
-              <h3 style="margin-top:0;">${esc(node.label)}</h3>
-              <p class="muted">Themes: ${node.themes_count} | Subtopics: ${node.subtopics_count}</p>
+              <h3 class="detail-title">${esc(node.label)}</h3>
+              <div class="detail-meta">
+                <span class="badge">Type: book</span>
+                <span class="badge">Themes: ${node.themes_count}</span>
+                <span class="badge">Subtopics: ${node.subtopics_count}</span>
+                ${node.status ? `<span class="badge">Status: ${esc(node.status)}</span>` : ''}
+              </div>
               <div class="pre">${esc(node.summary || 'Summary is not generated yet.')}</div>
               <p><a class="btn" href="/library/books/${node.book_id}/">Open summary</a></p>
             </div>
@@ -235,20 +407,34 @@
         if (node.type === 'theme') {
           const children = subtopicNodesForTheme(node.id).slice(0, 8);
           const items = children.map(item => `
-            <div class="card" style="margin-bottom:8px;">
+            <div class="card map-subtopic-card">
               <div><strong>${esc(item.label)}</strong></div>
-              <div class="muted">p${item.start_paragraph}-${item.end_paragraph}</div>
+              <div class="muted">
+                subtopic #${esc(item.subtopic_id || '')}
+                ${item.block_index ? ` | block #${esc(item.block_index)}` : ''}
+                | p${esc(item.source_start || item.start_paragraph)}-${esc(item.source_end || item.end_paragraph)}
+              </div>
               <div class="pre">${esc(item.summary || '')}</div>
+              <div style="margin-top:8px;">${blockActionsHtml(item, { compact: true })}</div>
             </div>
           `).join('');
 
           detailPanel.innerHTML = `
             <div class="card">
-              <h3 style="margin-top:0;">${esc(node.label)}</h3>
-              <p class="muted">${esc(node.chapter_title || 'Chapter not set')} | blocks ${node.start_block_number}-${node.end_block_number} | p${node.start_paragraph}-${node.end_paragraph}</p>
-              <h4 style="margin-bottom:6px;">Main meaning</h4>
+              <h3 class="detail-title">${esc(node.label)}</h3>
+              <div class="detail-meta">
+                <span class="badge">Type: theme</span>
+                <span class="badge">${esc(node.chapter_title || 'Chapter not set')}</span>
+                <span class="badge">blocks ${node.start_block_number}-${node.end_block_number}</span>
+                <span class="badge">p${node.start_paragraph}-${node.end_paragraph}</span>
+              </div>
+              <h4>Main meaning</h4>
               <div class="pre">${esc(node.summary || 'No summary.')}</div>
-              <p style="margin-top:10px;"><a class="btn" href="/library/books/${node.book_id}/">Open book</a></p>
+              <div class="action-bar" style="margin-top:10px;">
+                <a class="btn" href="/library/books/${node.book_id}/">Open book</a>
+                ${node.open_url ? `<a class="btn outline" href="${esc(node.open_url)}">Open selected theme</a>` : ''}
+                ${node.first_block_url ? `<a class="btn outline" href="${esc(node.first_block_url)}">Open first block</a>` : ''}
+              </div>
             </div>
             <h4>Subtopics</h4>
             ${items || '<p class="muted">No subtopics.</p>'}
@@ -258,12 +444,21 @@
 
         detailPanel.innerHTML = `
           <div class="card">
-            <h3 style="margin-top:0;">${esc(node.label)}</h3>
-            <p class="muted">p${node.start_paragraph}-${node.end_paragraph} | importance ${Number(node.importance_score || 0).toFixed(2)}</p>
-            <h4 style="margin-bottom:6px;">Short meaning</h4>
+            <h3 class="detail-title">${esc(node.label)}</h3>
+            <div class="detail-meta">
+              <span class="badge">Type: subtopic</span>
+              <span class="badge">subtopic #${esc(node.subtopic_id || '')}</span>
+              ${node.block_index ? `<span class="badge">block #${esc(node.block_index)}</span>` : ''}
+              <span class="badge">p${esc(node.source_start || node.start_paragraph)}-${esc(node.source_end || node.end_paragraph)}</span>
+              <span class="badge">importance ${Number(node.importance_score || 0).toFixed(2)}</span>
+            </div>
+            <h4>Short meaning</h4>
             <div class="pre">${esc(node.summary || 'No summary.')}</div>
             ${node.source_quote ? `<h4 style="margin-bottom:6px;margin-top:10px;">Source quote</h4><div class="pre muted">${esc(node.source_quote)}</div>` : ''}
-            <p style="margin-top:10px;"><a class="btn" href="/library/books/${node.book_id}/">Open source book</a></p>
+            <div class="action-bar" style="margin-top:10px;">
+              ${blockActionsHtml(node)}
+              <a class="btn" href="/library/books/${node.book_id}/">Open source book</a>
+            </div>
           </div>
         `;
       }
@@ -290,6 +485,57 @@
         viewportGroup.setAttribute('transform', `translate(${viewState.tx} ${viewState.ty}) scale(${viewState.scale})`);
       }
 
+      function fitToNodes(visibleNodes) {
+        if (!visibleNodes || visibleNodes.length === 0) {
+          viewState.scale = 1;
+          viewState.tx = 0;
+          viewState.ty = 0;
+          applyTransform();
+          setLevelInfo();
+          return;
+        }
+
+        if (visibleNodes.length === 1) {
+          const node = visibleNodes[0];
+          viewState.scale = 1;
+          viewState.tx = VIEW_W / 2 - Number(node.x || 0);
+          viewState.ty = VIEW_H / 2 - Number(node.y || 0);
+          applyTransform();
+          setLevelInfo();
+          return;
+        }
+
+        let minX = Infinity;
+        let minY = Infinity;
+        let maxX = -Infinity;
+        let maxY = -Infinity;
+
+        visibleNodes.forEach(node => {
+          const labelLength = labelForNode(node).length;
+          const r = nodeRadius(node) + 34 + labelLength * 3.2;
+          const x = Number(node.x || 0);
+          const y = Number(node.y || 0);
+          minX = Math.min(minX, x - r);
+          maxX = Math.max(maxX, x + r);
+          minY = Math.min(minY, y - r);
+          maxY = Math.max(maxY, y + r);
+        });
+
+        const boxW = Math.max(40, maxX - minX);
+        const boxH = Math.max(40, maxY - minY);
+        const padding = 85;
+        const scaleX = (VIEW_W - padding * 2) / boxW;
+        const scaleY = (VIEW_H - padding * 2) / boxH;
+        const fitMax = state.level === 'books' ? 1.25 : 1.55;
+        const scale = Math.max(MIN_SCALE, Math.min(fitMax, MAX_SCALE, Math.min(scaleX, scaleY)));
+
+        viewState.scale = scale;
+        viewState.tx = (VIEW_W - boxW * scale) / 2 - minX * scale;
+        viewState.ty = (VIEW_H - boxH * scale) / 2 - minY * scale;
+        applyTransform();
+        setLevelInfo();
+      }
+
       function zoomAt(factor, clientX, clientY) {
         const oldScale = viewState.scale;
         const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, oldScale * factor));
@@ -309,16 +555,19 @@
         setLevelInfo();
       }
 
+      function fitCurrentView() {
+        viewState.autoFitPending = true;
+        render();
+      }
+
       function resetViewTransform() {
-        viewState.scale = 1;
-        viewState.tx = 0;
-        viewState.ty = 0;
-        applyTransform();
-        setLevelInfo();
+        renderDetail(null);
+        fitCurrentView();
       }
 
       function draw(visibleNodes, visibleEdges) {
         viewportGroup.innerHTML = '';
+        applyLayout(visibleNodes);
 
         visibleEdges.forEach(edge => {
           const s = nodeById.get(edge.source);
@@ -329,10 +578,10 @@
           line.setAttribute('y1', s.y);
           line.setAttribute('x2', t.x);
           line.setAttribute('y2', t.y);
-          line.setAttribute('stroke', edge.type === 'related' ? '#2563eb' : '#94a3b8');
-          line.setAttribute('stroke-width', edge.type === 'related' ? Math.min(6, 1.2 + Number(edge.weight || 0) * 3.8) : 1.5);
-          line.setAttribute('stroke-dasharray', edge.type === 'related' ? '6 4' : '');
-          line.setAttribute('opacity', edge.type === 'related' ? '0.78' : '0.82');
+          line.setAttribute('stroke', edge.type === 'related' ? '#2563eb' : '#64748b');
+          line.setAttribute('stroke-width', edge.type === 'related' ? Math.min(2.2, 0.8 + Number(edge.weight || 0) * 1.2) : 1);
+          line.setAttribute('stroke-dasharray', edge.type === 'related' ? '8 7' : '');
+          line.setAttribute('opacity', edge.type === 'related' ? '0.32' : '0.26');
           viewportGroup.appendChild(line);
         });
 
@@ -343,24 +592,45 @@
           let fill = '#0ea5e9';
           if (node.type === 'theme') fill = '#16a34a';
           if (node.type === 'subtopic') fill = '#f59e0b';
+          const radius = nodeRadius(node);
+          const labelSize = nodeLabelSize(node);
+          const label = labelForNode(node);
 
           const circle = document.createElementNS(SVG_NS, 'circle');
           circle.setAttribute('cx', node.x);
           circle.setAttribute('cy', node.y);
-          circle.setAttribute('r', Math.max(8, Number(node.size || 12)));
+          circle.setAttribute('r', radius);
           circle.setAttribute('fill', fill);
           circle.setAttribute('stroke', '#1f2937');
-          circle.setAttribute('stroke-width', '1');
+          circle.setAttribute('stroke-width', node.type === 'book' ? '2' : '1.3');
           circle.setAttribute('opacity', '0.92');
 
+          const labelWidth = Math.max(24, label.length * labelSize * 0.58);
+          const labelHeight = labelSize + 7;
+          const labelX = Number(node.x);
+          const labelY = Number(node.y) + radius + 9;
+          const bg = document.createElementNS(SVG_NS, 'rect');
+          bg.setAttribute('x', labelX - labelWidth / 2 - 5);
+          bg.setAttribute('y', labelY - 4);
+          bg.setAttribute('width', labelWidth + 10);
+          bg.setAttribute('height', labelHeight);
+          bg.setAttribute('rx', '5');
+          bg.setAttribute('fill', 'rgba(255,255,255,0.92)');
+          bg.setAttribute('stroke', 'rgba(203,213,225,0.85)');
+          bg.setAttribute('stroke-width', '0.7');
+
           const text = document.createElementNS(SVG_NS, 'text');
-          text.setAttribute('x', Number(node.x) + Number(node.size || 12) + 4);
-          text.setAttribute('y', Number(node.y) + 4);
-          text.setAttribute('font-size', node.type === 'book' ? '15' : '12');
+          text.setAttribute('x', labelX);
+          text.setAttribute('y', labelY + labelSize - 2);
+          text.setAttribute('font-size', String(labelSize));
+          text.setAttribute('font-weight', node.type === 'book' ? '700' : '500');
           text.setAttribute('fill', '#0f172a');
-          text.textContent = node.label;
+          text.setAttribute('text-anchor', 'middle');
+          text.textContent = label;
+          text.setAttribute('data-full-label', node.label || '');
 
           g.appendChild(circle);
+          if (label) g.appendChild(bg);
           g.appendChild(text);
           g.addEventListener('click', () => {
             renderDetail(node);
@@ -368,6 +638,7 @@
               state.focusedBookId = node.id;
               state.focusedThemeId = null;
               state.level = 'themes';
+              viewState.autoFitPending = true;
               render();
               return;
             }
@@ -375,6 +646,7 @@
               state.focusedBookId = node.parent_id;
               state.focusedThemeId = node.id;
               state.level = 'subtopics';
+              viewState.autoFitPending = true;
               render();
             }
           });
@@ -389,9 +661,16 @@
         setLevelInfo();
         statsEl.textContent = `Visible: ${visibleNodes.length} nodes, ${visibleEdges.length} links`;
         draw(visibleNodes, visibleEdges);
+        if (viewState.autoFitPending) {
+          fitToNodes(visibleNodes);
+          viewState.autoFitPending = false;
+        }
       }
 
-      queryEl.addEventListener('input', render);
+      queryEl.addEventListener('input', () => {
+        viewState.autoFitPending = true;
+        render();
+      });
 
       levelBackEl.addEventListener('click', () => {
         if (state.level === 'subtopics') {
@@ -401,6 +680,7 @@
           state.level = 'books';
           state.focusedBookId = null;
         }
+        viewState.autoFitPending = true;
         render();
       });
 
@@ -410,10 +690,12 @@
         state.focusedThemeId = null;
         queryEl.value = '';
         renderDetail(null);
+        viewState.autoFitPending = true;
         render();
       });
 
       viewResetEl.addEventListener('click', resetViewTransform);
+      fitViewEl.addEventListener('click', () => fitCurrentView());
       zoomInEl.addEventListener('click', (event) => zoomAt(1.18, event.clientX || window.innerWidth / 2, event.clientY || window.innerHeight / 2));
       zoomOutEl.addEventListener('click', (event) => zoomAt(1 / 1.18, event.clientX || window.innerWidth / 2, event.clientY || window.innerHeight / 2));
 

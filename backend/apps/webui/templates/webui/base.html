@@ -1,64 +1,46 @@
+{% load static %}
 <!doctype html>
 <html lang="ru">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Intelligent Library{% endblock %}</title>
-    <style>
-        :root { color-scheme: light; }
-        body { margin: 0; font-family: Segoe UI, Arial, sans-serif; background: #f5f7fb; color: #111827; }
-        .wrap { max-width: 1120px; margin: 0 auto; padding: 20px; }
-        .card { background: #fff; border: 1px solid #dbe0ea; border-radius: 10px; padding: 16px; margin-bottom: 14px; }
-        .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-        .grow { flex: 1 1 auto; }
-        .btn { background: #1d4ed8; color: #fff; border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer; text-decoration: none; display: inline-block; }
-        .btn.gray { background: #4b5563; }
-        .btn.red { background: #b91c1c; }
-        .btn.green { background: #166534; }
-        .btn.outline { background: #fff; color: #1d4ed8; border: 1px solid #1d4ed8; }
-        input, textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #c6cfdd; border-radius: 8px; }
-        label { font-size: 14px; color: #334155; margin-bottom: 6px; display: inline-block; }
-        h1, h2, h3 { margin: 0 0 12px 0; }
-        .muted { color: #64748b; font-size: 14px; }
-        .messages { list-style: none; padding: 0; margin: 0 0 14px 0; }
-        .messages li { padding: 10px 12px; border-radius: 8px; margin-bottom: 8px; border: 1px solid #dbe0ea; background: #fff; }
-        .messages li.error { border-color: #fecaca; background: #fef2f2; color: #7f1d1d; }
-        .messages li.success { border-color: #bbf7d0; background: #f0fdf4; color: #14532d; }
-        .messages li.warning { border-color: #fde68a; background: #fffbeb; color: #78350f; }
-        .mono { font-family: Consolas, monospace; font-size: 13px; }
-        .pre { white-space: pre-wrap; }
-        .badge { padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #dbe0ea; background: #f8fafc; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 8px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
-        nav a { margin-right: 12px; text-decoration: none; color: #1d4ed8; font-weight: 600; }
-    </style>
+    <link rel="stylesheet" href="{% static 'webui/css/library_ui.css' %}">
 </head>
-<body>
-<div class="wrap">
+<body class="{% block body_class %}{% endblock %}">
+<div class="app-shell">
     {% if request.user.is_authenticated %}
-        <div class="card">
-            <nav class="row">
-                <a href="{% url 'webui:library' %}">Library</a>
-                <a href="{% url 'webui:concepts' %}">Concepts</a>
-                <a href="{% url 'webui:concept-map' %}">Map</a>
-                <span class="grow muted">Signed in as {{ request.user.email }}</span>
+        <header class="topbar">
+            <div class="topbar-inner">
+                <a class="brand" href="{% url 'webui:library' %}">
+                    <span class="brand-mark" aria-hidden="true"></span>
+                    <span>Intelligent Library</span>
+                </a>
+                <nav class="nav-links" aria-label="Main navigation">
+                    <a class="nav-link" href="{% url 'webui:library' %}">Library</a>
+                    <a class="nav-link" href="{% url 'webui:concept-map' %}">Semantic Map</a>
+                    <a class="nav-link" href="{% url 'webui:concepts' %}">Concepts</a>
+                </nav>
+                <span class="user-chip">{{ request.user.email }}</span>
                 <form method="post" action="{% url 'webui:logout' %}">
                     {% csrf_token %}
-                    <button class="btn gray" type="submit">Logout</button>
+                    <button class="btn subtle" type="submit">Logout</button>
                 </form>
-            </nav>
-        </div>
+            </div>
+        </header>
     {% endif %}
 
-    {% if messages %}
-        <ul class="messages">
-            {% for message in messages %}
-                <li class="{{ message.tags }}">{{ message }}</li>
-            {% endfor %}
-        </ul>
-    {% endif %}
+    <main class="wrap {% block wrap_class %}{% endblock %}">
+        {% if messages %}
+            <ul class="messages">
+                {% for message in messages %}
+                    <li class="{{ message.tags }}">{{ message }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
 
-    {% block content %}{% endblock %}
+        {% block content %}{% endblock %}
+    </main>
 </div>
 </body>
 </html>

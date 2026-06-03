@@ -37,7 +37,7 @@ from apps.books.services.concept_normalizer import normalize_concept_name
 from apps.books.services.concept_map import build_user_concept_map
 from apps.books.services.glossary_export import export_csv, export_json, export_pdf, export_txt
 from apps.books.services.hashing import sha256_bytes
-from apps.books.services.llm_service import compare_concept_mentions
+from apps.books.services.llm_service import compare_concept_mentions, ensure_llm_ready
 from apps.books.services.rag_service import search_similar_blocks, search_similar_concepts
 from apps.books.services.rotation import (
     MAX_BOOKS_PER_USER,
@@ -81,10 +81,41 @@ def _book_to_delete_payload(book: UserBook | None):
     }
 
 
-def _has_cached_analysis(global_cache) -> bool:
+def _analysis_mode_from_request(value) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in {
+        "classic",
+        "classic_improved",
+        "semantic_fast",
+        "semantic",
+        "hybrid",
+        "debug_structure",
+        "llm_preview",
+        "llm_full",
+        "llm_fast_batched",
+    }:
+        if mode == "semantic":
+            return "semantic_fast"
+        return mode
+    return "llm_fast_batched"
+
+
+def _has_cached_analysis(global_cache, *, required_mode: str = "llm_full") -> bool:
     if not global_cache:
         return False
-    return global_cache.logical_blocks.exists() and global_cache.themes.exists()
+    if not (global_cache.logical_blocks.exists() and global_cache.themes.exists()):
+        return False
+    metadata = global_cache.metadata if isinstance(global_cache.metadata, dict) else {}
+    pipeline = str(metadata.get("pipeline_used", "")).strip()
+    if required_mode == "llm_full":
+        return pipeline == "llm_full"
+    if required_mode == "llm_fast_batched":
+        return pipeline == "llm_fast_batched"
+    if required_mode == "llm_preview":
+        return pipeline in {"llm_preview", "llm_full", "llm_fast_batched"}
+    if required_mode == "debug_structure":
+        return pipeline == "debug_structure"
+    return True
 
 
 def _get_user_book_or_404(user, book_id: int) -> UserBook:
@@ -148,6 +179,14 @@ class UploadBooksView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
+        analysis_mode = _analysis_mode_from_request(request.data.get("analysis_mode"))
+        if analysis_mode in {"llm_full", "llm_preview", "llm_fast_batched"}:
+            llm_state = ensure_llm_ready(require_enabled=True)
+            if not llm_state.get("ok"):
+                return Response(
+                    {"detail": f"LLM is required for {analysis_mode}: {llm_state.get('error')}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
         created_items = []
         for uploaded_file in files:
             if uploaded_file.size > settings.MAX_FB2_FILE_SIZE:
@@ -193,7 +232,7 @@ class UploadBooksView(APIView):
             global_cache = GlobalBookCache.objects.filter(file_hash=file_hash).first()
             original_filename = os.path.basename(uploaded_file.name)
 
-            if global_cache and _has_cached_analysis(global_cache):
+            if global_cache and _has_cached_analysis(global_cache, required_mode=analysis_mode):
                 user_book = UserBook.objects.create(
                     user=request.user,
                     global_cache=global_cache,
@@ -202,6 +241,8 @@ class UploadBooksView(APIView):
                     original_filename=original_filename,
                     file_hash=file_hash,
                     status=UserBook.Status.READY,
+                    current_stage="ready",
+                    progress_percent=100,
                 )
                 created_items.append({"id": user_book.id, "status": user_book.status, "used_cache": True})
                 continue
@@ -211,11 +252,24 @@ class UploadBooksView(APIView):
                 global_cache=global_cache if global_cache else None,
                 original_filename=original_filename,
                 file_hash=file_hash,
-                status=UserBook.Status.PROCESSING,
+                status=UserBook.Status.QUEUED,
+                current_stage="queued",
+                progress_percent=1,
             )
             user_book.file.save(original_filename, ContentFile(content), save=True)
-            analyze_book_task.delay(user_book.id, force_reanalyze=bool(global_cache))
-            created_items.append({"id": user_book.id, "status": user_book.status, "used_cache": False})
+            analyze_book_task.delay(
+                user_book.id,
+                force_reanalyze=bool(global_cache),
+                analysis_mode=analysis_mode,
+            )
+            created_items.append(
+                {
+                    "id": user_book.id,
+                    "status": user_book.status,
+                    "used_cache": False,
+                    "analysis_mode": analysis_mode,
+                }
+            )
 
         return Response({"results": created_items}, status=status.HTTP_201_CREATED)
 
@@ -259,11 +313,21 @@ class ProtectBookView(APIView):
 class ReanalyzeBookView(APIView):
     def post(self, request, book_id):
         user_book = _get_user_book_or_404(request.user, book_id)
-        user_book.status = UserBook.Status.PROCESSING
+        analysis_mode = _analysis_mode_from_request(request.data.get("analysis_mode"))
+        if analysis_mode in {"llm_full", "llm_preview", "llm_fast_batched"}:
+            llm_state = ensure_llm_ready(require_enabled=True)
+            if not llm_state.get("ok"):
+                return Response(
+                    {"detail": f"LLM is required for {analysis_mode}: {llm_state.get('error')}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        user_book.status = UserBook.Status.QUEUED
+        user_book.current_stage = "queued"
+        user_book.progress_percent = 1
         user_book.error_message = ""
-        user_book.save(update_fields=["status", "error_message"])
-        analyze_book_task.delay(user_book.id, force_reanalyze=True)
-        return Response({"detail": "Reanalysis started.", "status": user_book.status})
+        user_book.save(update_fields=["status", "current_stage", "progress_percent", "error_message"])
+        analyze_book_task.delay(user_book.id, force_reanalyze=True, analysis_mode=analysis_mode)
+        return Response({"detail": "Reanalysis started.", "status": user_book.status, "analysis_mode": analysis_mode})
 
 
 class BookSummaryView(APIView):
@@ -286,6 +350,20 @@ class BookSummaryView(APIView):
         ).data
         data["views_count"] = user_book.views_count
         return Response(data)
+
+
+class BookSemanticMapView(APIView):
+    def get(self, request, book_id):
+        user_book = _get_user_book_or_404(request.user, book_id)
+        if not user_book.global_cache:
+            return Response({"book_title": user_book.title or user_book.original_filename, "blocks": [], "links": []})
+
+        metadata = user_book.global_cache.metadata or {}
+        semantic_map = metadata.get("semantic_map")
+        if isinstance(semantic_map, dict):
+            return Response(semantic_map)
+
+        return Response({"book_title": user_book.title, "blocks": [], "links": []})
 
 
 class BookBlocksView(APIView):
