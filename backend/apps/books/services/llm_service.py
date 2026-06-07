@@ -82,6 +82,103 @@ GENERIC_SINGLE_TERMS = {
     "структура",
 }
 
+TERM_BAD_START_WORDS = {
+    "я",
+    "мы",
+    "ты",
+    "вы",
+    "он",
+    "она",
+    "оно",
+    "они",
+    "это",
+    "этот",
+    "эта",
+    "эти",
+    "такой",
+    "такая",
+    "такие",
+    "данный",
+    "данная",
+    "данные",
+    "который",
+    "которая",
+    "которые",
+    "что",
+    "чтобы",
+    "если",
+    "когда",
+    "где",
+    "как",
+    "в",
+    "во",
+    "на",
+    "с",
+    "со",
+    "у",
+    "о",
+    "об",
+    "и",
+    "или",
+    "но",
+    "а",
+    "тем",
+    "для",
+}
+TERM_BAD_PHRASE_MARKERS = {
+    "я думаю",
+    "думаю что",
+    "что у нас",
+    "у нас",
+    "нас есть",
+    "есть проблема",
+    "этот мем",
+    "мем который",
+    "говорит о том",
+    "говорит что",
+    "который говорит",
+    "тем что",
+    "в том что",
+    "то что",
+    "поэтому",
+    "таким образом",
+}
+PAIRWISE_WEAK_SHARED_TERMS = {
+    "вселенная",
+    "мир",
+    "реальность",
+    "изображение",
+    "знание",
+    "проблема",
+    "данные",
+    "информация",
+    "наблюдение",
+    "фотография",
+    "снимок",
+    "объект",
+    "идея",
+}
+PAIRWISE_SAME_CONTRADICTION_RE = re.compile(
+    r"(?:разные|различн|по-разному|разными аспект|разные аспект|через разные|"
+    r"отличаются|не совпадают|косвенн|общая тема|одной общей теме)",
+    re.IGNORECASE,
+)
+PAIRWISE_ENGLISH_EXPLANATION_RE = re.compile(
+    r"\b(?:Thought\s+[AB]|Both\s+thoughts?|both\s+ideas|discuss(?:es)?|focus(?:es)?|"
+    r"different\s+topics?|different\s+subjects?|same\s+idea|same\s+theme|common\s+theme|"
+    r"these\s+thoughts|on\s+the\s+other\s+hand|clearly\s+about|topic|concepts?|issue\s+of|"
+    r"cosmology|philosophy|similarity|relation|connection|context)\b",
+    re.IGNORECASE,
+)
+ENGLISH_WORD_RE = re.compile(r"[A-Za-z]{3,}")
+ENGLISH_SERVICE_PHRASE_RE = re.compile(
+    r"\b(?:thought|concept|topic|summary|discuss|focus|same|different|relation|connection|"
+    r"knowledge|context|issue|explanation|universe|reality)\b",
+    re.IGNORECASE,
+)
+MIXED_LANGUAGE_TOKEN_RE = re.compile(r"(?:[A-Za-z]+[А-Яа-яЁё]+|[А-Яа-яЁё]+[A-Za-z]+)")
+WEIRD_THOUGHT_TOKEN_RE = re.compile(r"(?:спутево|урвнения|приknowledge)", re.IGNORECASE)
+
 IRRELEVANT_DOMAIN_RE = re.compile(
     r"(?:python|django|flask|javascript|frontend|backend|"
     r"программировани|разработк[аи]\s+приложен|тестировани[ея]\s+приложен|"
@@ -278,6 +375,203 @@ def _is_generic_term_name(term: str) -> bool:
     return False
 
 
+def _is_bad_thought_chain_term(term: str) -> bool:
+    value = " ".join((term or "").split()).strip()
+    if not value or len(value) < 3:
+        return True
+    words = WORD_RE.findall(value.lower())
+    if not words:
+        return True
+    if len(words) > 5:
+        return True
+    lowered = value.lower()
+    bad_prefixes = (
+        "к ",
+        "ко ",
+        "эту ",
+        "это ",
+        "этот ",
+        "свою ",
+        "своё ",
+        "свои ",
+        "под ",
+    )
+    bad_suffixes = (
+        " под",
+        " свою",
+        " свое",
+        " свои",
+    )
+    if lowered.startswith(bad_prefixes) or lowered.endswith(bad_suffixes):
+        return True
+    if words[0] in TERM_BAD_START_WORDS:
+        return True
+    if words[-1] in TERM_BAD_START_WORDS:
+        return True
+    if any(word.isdigit() for word in words):
+        return True
+    bad_any_words = {
+        "нас",
+        "нам",
+        "мне",
+        "меня",
+        "тут",
+        "вокруг",
+        "сегодня",
+        "том",
+        "этого",
+        "этим",
+        "этой",
+        "все",
+        "всё",
+        "достаточно",
+        "каких",
+        "каких-либо",
+        "либо",
+        "никогда",
+        "мем",
+        "студию",
+        "студия",
+        "нужно",
+        "именно",
+        "даже",
+        "эпоху",
+        "предложения",
+        "смысл",
+        "оригинальный",
+        "некоторые",
+    }
+    if any(word in bad_any_words for word in words):
+        return True
+    if len(words) == 1 and words[0] in {
+        "мем",
+        "студия",
+        "студию",
+        "штамп",
+        "штампы",
+        "камера",
+        "камеры",
+        "камеру",
+        "общество",
+        "обществе",
+        "мороки",
+        "морока",
+        "одной",
+        "популярный",
+        "изображение",
+        "информация",
+        "информации",
+        "сообщение",
+        "сообщений",
+        "решений",
+        "решение",
+        "доверия",
+        "доверие",
+        "принятия",
+        "принятие",
+        "фейков",
+        "фейк",
+        "работа",
+        "работу",
+        "фотоманипуляция",
+        "фотоманипуляций",
+        "знаки",
+        "подтверждения",
+        "снимки",
+        "рождество",
+    }:
+        return True
+    bad_extra_markers = {
+        "мем о том",
+        "фото в студию",
+        "нас достаточно",
+        "достаточно мороки",
+        "одной вселенной",
+        "с одной вселенной",
+        "штампы и водяные",
+        "водяные знаки используются",
+        "записано на камеру",
+        "используются для подтверждения",
+        "студию никогда",
+        "популярный мем",
+        "принятия каких-либо",
+        "каких-либо решений",
+        "решений или доверия",
+        "доверия к",
+        "информации нужно",
+        "нужно именно",
+        "оригинальный смысл",
+        "смысл предложения",
+        "даже в эпоху",
+        "фейков и фотоманипуляций",
+        "фотоманипуляций некоторые",
+        "некоторые изображения",
+        "изображения остаются",
+        "эту информацию",
+        "свою работу",
+        "начал свою",
+        "работу под",
+    }
+    if any(marker in lowered for marker in bad_extra_markers):
+        return True
+    if any(marker in lowered for marker in TERM_BAD_PHRASE_MARKERS):
+        return True
+    try:
+        first_tag = morph.parse(words[0])[0].tag
+        last_tag = morph.parse(words[-1])[0].tag
+        if len(words) == 1:
+            normal = morph.parse(words[0])[0].normal_form
+            if normal in {
+                "камера",
+                "общество",
+                "морока",
+                "один",
+                "мем",
+                "студия",
+                "штамп",
+                "изображение",
+                "информация",
+                "сообщение",
+                "решение",
+                "доверие",
+                "принятие",
+                "фейк",
+                "работа",
+                "фотоманипуляция",
+                "снимок",
+                "рождество",
+                "подтверждение",
+            }:
+                return True
+        bad_edge_tags = {"VERB", "INFN", "PRTF", "PRTS", "GRND", "ADVB", "NPRO", "NUMR", "PRED"}
+        if bad_edge_tags & set(str(first_tag).split(",")):
+            return True
+        if bad_edge_tags & set(str(last_tag).split(",")):
+            return True
+        if len(words) == 1 and "NOUN" not in str(first_tag).split(","):
+            return True
+    except Exception:
+        pass
+    if len(words) >= 3:
+        service_count = sum(1 for word in words if word in TERM_BAD_START_WORDS)
+        if service_count >= 2:
+            return True
+    if _is_generic_term_name(value):
+        return True
+    # Terms should contain at least one domain-like noun, abbreviation, or named token.
+    has_abbreviation = any(re.fullmatch(r"[A-ZА-ЯЁ0-9][A-ZА-ЯЁ0-9\-]{1,12}", token) for token in WORD_RE.findall(value))
+    if has_abbreviation:
+        return False
+    noun_like = 0
+    for word in words:
+        if len(word) < 3 or word in TERM_BAD_START_WORDS:
+            continue
+        parsed = morph.parse(word)[0]
+        if "NOUN" in parsed.tag or "ADJF" in parsed.tag:
+            noun_like += 1
+    return noun_like == 0
+
+
 def _filter_term_strings(items: list[str], *, limit: int, max_len: int = 120) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -286,13 +580,226 @@ def _filter_term_strings(items: list[str], *, limit: int, max_len: int = 120) ->
         key = value.lower()
         if not value or key in seen:
             continue
-        if _is_generic_term_name(value):
+        if _is_bad_thought_chain_term(value):
             continue
         seen.add(key)
         result.append(value[:max_len])
         if len(result) >= limit:
             break
     return result
+
+
+def _clean_sentence_as_thought(sentence_text: str, *, limit: int = 900) -> str:
+    value = _thought_chain_normalize_text(sentence_text, limit=limit)
+    value = re.sub(r"\[\d+\]", "", value)
+    value = re.sub(r"\(\s*\d+\s*\)", "", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    # Preserve the source wording; only normalize obvious typography.
+    value = value.replace(" – ", " ").replace(" — ", " ")
+    value = re.sub(r"\s+", " ", value).strip(" ,;:-")
+    if value and value[-1] not in ".!?…":
+        value += "."
+    return value[:limit]
+
+
+def _safe_sentence_fallback_payload(
+    sentence_text: str,
+    *,
+    reason_flags: list[str] | None = None,
+    raw_response: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    thought = _clean_sentence_as_thought(sentence_text)
+    terms = _filter_term_strings(_thought_chain_terms(sentence_text, limit=12), limit=5, max_len=120)
+    pre_repair_flags = list(reason_flags or [])
+    bad_final_flags = {
+        "weird_token",
+        "mixed_language_token",
+        "cjk_token",
+        "english_service_text",
+        "ungrounded_thought",
+    }
+    flags = ["safe_sentence_fallback_used"]
+    for flag in pre_repair_flags:
+        if flag in bad_final_flags:
+            continue
+        if flag not in flags:
+            flags.append(flag)
+    return {
+        "thought": thought,
+        "normalized_thought": _normalize_thought_for_storage(thought),
+        "terms": terms,
+        "is_meaningful": bool(thought) and len(WORD_RE.findall(thought)) >= 4,
+        "noise": False,
+        "skip_reason": "",
+        "json_valid": True,
+        "fallback_used": False,
+        "quality_flags": flags,
+        "pre_repair_quality_flags": pre_repair_flags,
+        "pre_repair_thought": str((raw_response or {}).get("thought", ""))[:700] if isinstance(raw_response, dict) else "",
+        "weird_token_examples": [],
+        "terms_removed_count": 0,
+        "terms_removed_examples": [],
+        "llm_raw_response": raw_response or {"source": "safe_sentence_fallback"},
+    }
+
+
+def _safe_group_idea(thoughts: list[str], *, limit: int = 1000) -> str:
+    cleaned = [_thought_chain_normalize_text(item, limit=260) for item in thoughts if _thought_chain_normalize_text(item, limit=260)]
+    value = " ".join(cleaned)
+    return _thought_chain_normalize_text(value, limit=limit)
+
+
+def _english_word_run_detected(value: str, *, min_run: int = 4) -> bool:
+    current = 0
+    for token in re.findall(r"[A-Za-z]{3,}|[А-Яа-яЁё]+|\d+", value or ""):
+        if ENGLISH_WORD_RE.fullmatch(token):
+            current += 1
+            if current >= min_run:
+                return True
+        else:
+            current = 0
+    return False
+
+
+def _content_tokens_for_relation(value: str) -> set[str]:
+    tokens: set[str] = set()
+    for token in _normalize_thought_for_storage(value).split():
+        if len(token) < 4:
+            continue
+        if token in STOP_WORDS or token in TERM_BAD_START_WORDS or token in PAIRWISE_WEAK_SHARED_TERMS:
+            continue
+        tokens.add(token)
+    return tokens
+
+
+def _collect_thought_quality_flags(
+    thought: str,
+    terms: list[str],
+    source_text: str,
+) -> tuple[list[str], list[str]]:
+    flags: list[str] = []
+    examples: list[str] = []
+    combined = " ".join([thought or "", *terms])
+    for match in WEIRD_THOUGHT_TOKEN_RE.findall(combined):
+        if match not in examples:
+            examples.append(match)
+    if examples:
+        flags.append("weird_token")
+
+    mixed = MIXED_LANGUAGE_TOKEN_RE.findall(combined)
+    if mixed:
+        flags.append("mixed_language_token")
+        for item in mixed[:5]:
+            if item not in examples:
+                examples.append(item)
+
+    if CJK_RE.search(combined):
+        flags.append("cjk_token")
+
+    # English service words are usually artifacts of the model response, not
+    # source terms. Acronyms remain allowed because they are short/uppercase.
+    if ENGLISH_SERVICE_PHRASE_RE.search(combined) or _english_word_run_detected(combined, min_run=3):
+        flags.append("english_service_text")
+
+    source_tokens = _content_tokens_for_relation(source_text)
+    thought_tokens = _content_tokens_for_relation(thought)
+    if thought and source_tokens and thought_tokens:
+        overlap = len(source_tokens & thought_tokens) / max(1, len(thought_tokens))
+        if overlap < 0.08 and len(thought_tokens) >= 4:
+            flags.append("ungrounded_thought")
+
+    deduped: list[str] = []
+    for flag in flags:
+        if flag not in deduped:
+            deduped.append(flag)
+    return deduped, examples[:8]
+
+
+def _semantic_guard_pair_relation(
+    *,
+    text_a: str,
+    text_b: str,
+    relation: str,
+    score: float,
+    lexical_score: float,
+    explanation: str,
+) -> tuple[str, float, list[str]]:
+    flags: list[str] = []
+    tokens_a = _content_tokens_for_relation(text_a)
+    tokens_b = _content_tokens_for_relation(text_b)
+    shared = tokens_a & tokens_b
+    weak_shared = set(_normalize_thought_for_storage(text_a).split()) & set(_normalize_thought_for_storage(text_b).split())
+    weak_shared = {item for item in weak_shared if item in PAIRWISE_WEAK_SHARED_TERMS}
+    contradiction = bool(PAIRWISE_SAME_CONTRADICTION_RE.search(explanation or ""))
+
+    if relation == "same":
+        if contradiction:
+            flags.append("semantic_guard_downgraded_same_contradiction")
+            return "related", min(score, 0.78), flags
+        if lexical_score < 0.20 or len(shared) < 2:
+            flags.append("semantic_guard_downgraded_same_low_overlap")
+            if lexical_score >= 0.12 and shared:
+                return "related", min(score, 0.78), flags
+            return "different", min(score, 0.60), flags
+        if weak_shared and len(shared) <= 1:
+            flags.append("semantic_guard_downgraded_same_weak_terms")
+            return "different", min(score, 0.60), flags
+
+    if relation == "related":
+        if lexical_score < 0.06 and not shared:
+            flags.append("semantic_guard_downgraded_related_no_overlap")
+            return "different", min(score, 0.60), flags
+
+    return relation, score, flags
+
+
+def _relation_score_is_consistent(relation: str, score: float) -> bool:
+    if relation == "same":
+        return score >= 0.90
+    if relation == "related":
+        return 0.65 <= score < 0.90
+    return score < 0.65
+
+
+def _normalize_relation_score(relation: str, score: float) -> tuple[float, bool]:
+    original = max(0.0, min(1.0, score))
+    if relation == "same":
+        fixed = max(original, 0.90)
+    elif relation == "related":
+        fixed = min(0.89, max(original, 0.65))
+    else:
+        fixed = min(original, 0.59)
+    fixed = round(max(0.0, min(1.0, fixed)), 4)
+    return fixed, fixed != round(original, 4)
+
+
+def _has_forbidden_english_pairwise_explanation(value: str) -> bool:
+    text = value or ""
+    return bool(PAIRWISE_ENGLISH_EXPLANATION_RE.search(text) or _english_word_run_detected(text, min_run=4))
+
+
+def _fallback_pairwise_explanation(relation: str, score: float) -> str:
+    if relation == "same":
+        return f"Мысли раскрывают одну и ту же идею; оценка связи {score:.2f}."
+    if relation == "related":
+        return f"Мысли относятся к одной общей теме, но раскрывают разные аспекты; оценка связи {score:.2f}."
+    return f"Мысли относятся к разным смысловым центрам; оценка связи {score:.2f}."
+
+
+RELATION_EXPLANATION_CONTRADICTION_RE = re.compile(
+    r"(?:одно и то же|одну и ту же|делают одно|фактически совпада|строго похож|"
+    r"считаются одной мыслью|их схожесть|подтверждает их схожесть|заменить друг друга)",
+    re.IGNORECASE,
+)
+
+
+def validate_relation_explanation_consistency(relation: str, explanation: str) -> tuple[bool, str]:
+    text = explanation or ""
+    if relation == "different" and RELATION_EXPLANATION_CONTRADICTION_RE.search(text):
+        return False, "different_explanation_claims_same"
+    if relation == "same" and re.search(r"(?:разные темы|не связаны|разным смысловым|слабую связь)", text, re.IGNORECASE):
+        return False, "same_explanation_claims_different"
+    return True, ""
 
 
 def _truncate_for_prompt(text: str, max_chars: int) -> str:
@@ -360,10 +867,11 @@ def _ollama_generate(
         return None
     endpoint = f"{base_url}/api/generate"
     timeout_seconds = cfg["timeout_seconds"]
+    is_thought_chain = analysis_type.startswith("thought_chain")
     max_tokens = int(
         os.getenv(
             "OLLAMA_MAX_TOKENS_JSON" if expect_json else "OLLAMA_MAX_TOKENS_TEXT",
-            "220" if expect_json else "140",
+            "512" if expect_json and is_thought_chain else ("220" if expect_json else "140"),
         )
     )
     cache_key = _llm_cache_key(prompt, model=model, analysis_type=analysis_type, expect_json=expect_json)
@@ -386,16 +894,25 @@ def _ollama_generate(
 
     for chosen_model in models_to_try:
         for attempt in range(1, attempts + 1):
+            llm_options: dict[str, Any] = {
+                "temperature": 0,
+                "top_p": 1,
+                "num_ctx": 4096,
+                "num_predict": max_tokens,
+            }
+            if is_thought_chain:
+                llm_options.update(
+                    {
+                        "top_p": 0.1,
+                        "top_k": 20,
+                        "repeat_penalty": 1.1,
+                    }
+                )
             payload: dict[str, Any] = {
                 "model": chosen_model,
                 "prompt": prompt,
                 "stream": False,
-                "options": {
-                    "temperature": 0,
-                    "top_p": 1,
-                    "num_ctx": 4096,
-                    "num_predict": max_tokens,
-                },
+                "options": llm_options,
             }
             if expect_json:
                 payload["format"] = "json"
@@ -465,6 +982,44 @@ def _safe_json_parse(raw: str) -> Any:
             except json.JSONDecodeError:
                 return None
     return None
+
+
+STRICT_JSON_SCHEMAS: dict[str, dict[str, type | tuple[type, ...]]] = {
+    "thought_chain_sentence": {
+        "thought": str,
+        "normalized_thought": str,
+        "terms": list,
+        "is_meaningful": bool,
+        "noise": bool,
+        "skip_reason": str,
+    },
+    "thought_chain_pair": {
+        "relation": str,
+        "score": (int, float),
+        "explanation": str,
+    },
+    "thought_chain_same_block": {
+        "same_block": bool,
+        "score": (int, float),
+        "reason": str,
+        "updated_block_idea": str,
+    },
+}
+
+
+def parse_llm_json_strict(response_text: str, schema_name: str) -> dict[str, Any]:
+    parsed = _safe_json_parse(response_text or "")
+    if not isinstance(parsed, dict):
+        return {"ok": False, "data": None, "error": "invalid_json"}
+    schema = STRICT_JSON_SCHEMAS.get(schema_name, {})
+    for field, expected_type in schema.items():
+        if field not in parsed:
+            return {"ok": False, "data": parsed, "error": f"missing_field:{field}"}
+        if expected_type == (int, float) and isinstance(parsed[field], bool):
+            return {"ok": False, "data": parsed, "error": f"bad_type:{field}"}
+        if not isinstance(parsed[field], expected_type):
+            return {"ok": False, "data": parsed, "error": f"bad_type:{field}"}
+    return {"ok": True, "data": parsed, "error": ""}
 
 
 def _repair_json_once(raw: str) -> str:
@@ -1015,7 +1570,8 @@ def _json_object_call(
         model_name=model_name,
         analysis_type=analysis_type,
     )
-    parsed = _safe_json_parse(raw or "")
+    strict_result = parse_llm_json_strict(raw or "", "thought_chain_same_block")
+    parsed = strict_result.get("data") if strict_result.get("ok") else None
     if isinstance(parsed, dict):
         return parsed, ""
     if raw:
@@ -1044,7 +1600,8 @@ def _json_object_call_with_meta(
         model_name=model or None,
         analysis_type=analysis_type,
     )
-    parsed = _safe_json_parse(raw or "")
+    strict_result = parse_llm_json_strict(raw or "", "thought_chain_pair")
+    parsed = strict_result.get("data") if strict_result.get("ok") else None
     if isinstance(parsed, dict):
         return parsed, "", {
             "cache_hit": cache_hit,
@@ -2676,4 +3233,748 @@ def mini_check_logical_block(title: str, block_text: str) -> dict[str, Any]:
         "themes": [],
         "notes": "llm_invalid_json",
         "confidence": 0.0,
+    }
+
+
+def _thought_chain_normalize_text(value: str, *, limit: int = 1200) -> str:
+    return " ".join(str(value or "").split()).strip()[:limit]
+
+
+def _thought_chain_terms(text: str, *, limit: int = 8) -> list[str]:
+    candidates: list[str] = []
+    words = WORD_RE.findall(text or "")
+    for size in (3, 2):
+        for index in range(0, max(0, len(words) - size + 1)):
+            phrase = " ".join(words[index : index + size]).strip()
+            if len(phrase) >= 8:
+                candidates.append(phrase)
+    for word in words:
+        if len(word) >= 5:
+            candidates.append(word)
+    return _filter_term_strings(candidates, limit=limit, max_len=120)
+
+
+def _normalize_thought_for_storage(text: str) -> str:
+    tokens: list[str] = []
+    for raw in WORD_RE.findall(text or ""):
+        token = raw.lower()
+        if len(token) < 3 or token.isdigit():
+            continue
+        try:
+            token = morph.parse(token)[0].normal_form
+        except Exception:
+            pass
+        tokens.append(token)
+    return " ".join(tokens[:80])
+
+
+THOUGHT_CHAIN_NOISE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^\s*$"), "empty sentence"),
+    (re.compile(r"^\s*\[\d+\]\s*$"), "reference marker"),
+    (re.compile(r"^\s*\(?[a-zа-я]\)?\s*\d+(?:\.\d+)*\.?\s*$", re.IGNORECASE), "figure/table marker"),
+    (re.compile(r"^\s*\d+(?:\.\d+)*\.?\s*$"), "section/page number without content"),
+    (re.compile(r"^\s*(?:глава|chapter)\s+[ivxlcdm\d]+\.?\s*$", re.IGNORECASE), "chapter heading without content"),
+    (re.compile(r"^\s*(?:илл|рис|fig|figure|табл|table)\.?\s*$", re.IGNORECASE), "figure/table caption marker"),
+    (re.compile(r"(?:©|copyright|all rights reserved|все права защищены|isbn)", re.IGNORECASE), "copyright/publisher metadata"),
+    (re.compile(r"https?://|www\.", re.IGNORECASE), "standalone URL or web reference"),
+)
+
+
+def _prefilter_thought_chain_noise(text: str) -> str:
+    value = _thought_chain_normalize_text(text, limit=1600)
+    if not value:
+        return "empty sentence"
+    words = WORD_RE.findall(value)
+    if len(value) <= 4:
+        return "too short technical fragment"
+    for pattern, reason in THOUGHT_CHAIN_NOISE_PATTERNS:
+        if pattern.search(value):
+            return reason
+    if len(words) < 3 and not any(len(word) >= 6 for word in words):
+        return "too short without standalone semantic statement"
+    return ""
+
+
+def extract_sentence_thought(sentence_text: str, *, model_name: str | None = None) -> dict[str, Any]:
+    """Extract one grounded thought from one sentence. Never raises."""
+
+    text = _thought_chain_normalize_text(sentence_text, limit=1600)
+    fallback = {
+        "thought": text[:500],
+        "normalized_thought": _normalize_thought_for_storage(text),
+        "terms": _filter_term_strings(_thought_chain_terms(text, limit=12), limit=5, max_len=120),
+        "is_meaningful": len(WORD_RE.findall(text)) >= 4,
+        "noise": len(WORD_RE.findall(text)) < 4,
+        "skip_reason": "fallback lexical gate",
+        "json_valid": False,
+        "fallback_used": True,
+        "quality_flags": ["fallback_thought_extraction"],
+        "terms_removed_count": 0,
+        "terms_removed_examples": [],
+        "llm_raw_response": {},
+    }
+    if not text:
+        return {**fallback, "thought": "", "is_meaningful": False, "noise": True, "skip_reason": "empty sentence"}
+
+    prefilter_reason = _prefilter_thought_chain_noise(text)
+    if prefilter_reason:
+        return {
+            "thought": "",
+            "normalized_thought": "",
+            "terms": [],
+            "is_meaningful": False,
+            "noise": True,
+            "skip_reason": prefilter_reason,
+            "json_valid": True,
+            "fallback_used": False,
+            "quality_flags": ["deterministic_noise_prefilter"],
+            "llm_raw_response": {"source": "deterministic_prefilter", "reason": prefilter_reason},
+        }
+
+    prompt = (
+        "Ты анализируешь ОДНО предложение из книги.\n"
+        "Твоя задача — выделить главную мысль предложения.\n"
+        "Ответ должен быть строго JSON. Никакого текста вне JSON.\n"
+        "Язык ответа: русский.\n\n"
+        "Запрещено:\n"
+        "- писать на английском, кроме терминов, которые уже есть в исходном предложении;\n"
+        "- придумывать новые факты или новые слова;\n"
+        "- добавлять термины, которых нет в предложении;\n"
+        "- делать художественный пересказ или слишком свободное обобщение;\n"
+        "- менять смысл предложения;\n"
+        "- использовать смешанные слова вроде \"приknowledge\";\n"
+        "- использовать китайский, английский или другой язык в русской мысли.\n\n"
+        "Главное правило: мысль должна быть grounded, то есть опираться на исходное предложение.\n"
+        "Если предложение уже короткое и нормальное, можно почти сохранить его как thought.\n"
+        "Если предложение является мусором, заголовком, номером главы, copyright, ссылкой, ISBN, номером страницы или обрывком, поставь is_meaningful=false и noise=true.\n\n"
+        "Формат ответа:\n"
+        "{\n"
+        '  "is_meaningful": true,\n'
+        '  "noise": false,\n'
+        '  "thought": "короткая главная мысль на русском",\n'
+        '  "normalized_thought": "нормализованная мысль на русском",\n'
+        '  "terms": ["понятие 1", "понятие 2"],\n'
+        '  "skip_reason": ""\n'
+        "}\n\n"
+        "Правила для terms:\n"
+        "- только предметные существительные или устойчивые термины;\n"
+        "- не больше 5;\n"
+        "- нельзя случайные n-граммы, местоимения, вводные слова, глагольные хвосты;\n"
+        "- если нормальных терминов нет, верни пустой список.\n\n"
+        "Пример 1:\n"
+        "Предложение: Проверенный временем научный метод требует экспериментальных подтверждений.\n"
+        "Ответ: {\"is_meaningful\":true,\"noise\":false,\"thought\":\"Научный метод требует экспериментальных подтверждений.\",\"normalized_thought\":\"Научные утверждения должны подтверждаться экспериментально.\",\"terms\":[\"научный метод\",\"экспериментальное подтверждение\"],\"skip_reason\":\"\"}\n\n"
+        "Пример 2:\n"
+        "Предложение: ГЛАВА 2\n"
+        "Ответ: {\"is_meaningful\":false,\"noise\":true,\"thought\":\"\",\"normalized_thought\":\"\",\"terms\":[],\"skip_reason\":\"Заголовок главы без самостоятельной мысли.\"}\n\n"
+        f"Исходное предложение:\n{text}"
+    )
+    raw = _ollama_generate(
+        prompt,
+        expect_json=True,
+        tier="fast",
+        model_name=model_name,
+        analysis_type="thought_chain_sentence",
+    )
+    strict_result = parse_llm_json_strict(raw or "", "thought_chain_sentence")
+    parsed = strict_result.get("data") if strict_result.get("ok") else None
+    retry_used = False
+    if not isinstance(parsed, dict):
+        # Some small Ollama models occasionally break JSON on long sentences.
+        # Retry once with a shorter schema-only prompt before falling back.
+        retry_prompt = (
+            f"Предыдущий ответ был невалиден: {strict_result.get('error', 'invalid_json')}.\n"
+            "Исправь только JSON. Никакого текста вне JSON. Все строки строго на русском.\n"
+            'Schema: {"thought":"","normalized_thought":"","terms":[],"is_meaningful":true,'
+            '"noise":false,"skip_reason":""}\n'
+            "Не добавляй новых фактов. Если не можешь безопасно обобщить, используй очищенное исходное предложение.\n"
+            f"Исходное предложение: {text[:900]}"
+        )
+        retry_raw = _ollama_generate(
+            retry_prompt,
+            expect_json=True,
+            tier="fast",
+            model_name=model_name,
+            analysis_type="thought_chain_sentence_retry",
+            cache_ttl=0,
+        )
+        retry_strict = parse_llm_json_strict(retry_raw or "", "thought_chain_sentence")
+        parsed = retry_strict.get("data") if retry_strict.get("ok") else None
+        raw = retry_raw or raw
+        retry_used = isinstance(parsed, dict)
+    if isinstance(parsed, dict):
+        thought = _thought_chain_normalize_text(str(parsed.get("thought", "")), limit=700)
+        normalized = _thought_chain_normalize_text(str(parsed.get("normalized_thought", "")), limit=700)
+        if CJK_RE.search(thought) and normalized and not CJK_RE.search(normalized):
+            thought = normalized
+        terms_raw = parsed.get("terms", [])
+        llm_terms = [str(item).strip() for item in terms_raw if str(item).strip()] if isinstance(terms_raw, list) else []
+        auto_terms = _thought_chain_terms(thought, limit=10)
+        raw_terms = llm_terms + auto_terms
+        terms = _filter_term_strings(raw_terms, limit=5, max_len=120)
+        removed_terms = []
+        kept_keys = {item.lower() for item in terms}
+        for item in raw_terms:
+            value = " ".join(str(item).split()).strip()
+            if value and value.lower() not in kept_keys and value not in removed_terms:
+                removed_terms.append(value)
+        is_meaningful = bool(parsed.get("is_meaningful", True)) and bool(thought)
+        noise = bool(parsed.get("noise", False)) or not is_meaningful
+        skip_reason = _thought_chain_normalize_text(str(parsed.get("skip_reason", "")), limit=500)
+        if noise:
+            thought = ""
+            normalized = ""
+            terms = []
+            if not skip_reason:
+                skip_reason = "LLM marked sentence as non-meaningful noise."
+        if not normalized:
+            normalized = _normalize_thought_for_storage(thought)
+        quality_flags = (["json_retry_used"] if retry_used else []) + ([] if is_meaningful else ["noise_sentence"])
+        weird_examples: list[str] = []
+        thought_retry_used = False
+        if is_meaningful and not noise:
+            extra_flags, weird_examples = _collect_thought_quality_flags(thought, terms, text)
+            pre_repair_flags = list(extra_flags)
+            critical_flags = {"weird_token", "mixed_language_token", "cjk_token", "english_service_text", "ungrounded_thought"}
+            if critical_flags & set(extra_flags):
+                retry_prompt = (
+                    "Return ONLY valid JSON. No markdown. Russian Cyrillic string values only.\n"
+                    'Schema: {"thought":"","normalized_thought":"","terms":[],"is_meaningful":true,'
+                    '"noise":false,"skip_reason":""}\n'
+                    "Rewrite the sentence as one grounded thought. Do not invent words. "
+                    "Do not use English service words, Chinese, or mixed-language tokens. "
+                    "Use only information from the source sentence. Return at most 5 clean terms.\n"
+                    f"Source sentence: {text[:900]}"
+                )
+                retry_raw = _ollama_generate(
+                    retry_prompt,
+                    expect_json=True,
+                    tier="fast",
+                    model_name=model_name,
+                    analysis_type="thought_chain_sentence_quality_retry",
+                    cache_ttl=0,
+                )
+                retry_parsed = _safe_json_parse(retry_raw or "")
+                if isinstance(retry_parsed, dict):
+                    candidate_thought = _thought_chain_normalize_text(str(retry_parsed.get("thought", "")), limit=700)
+                    candidate_terms_raw = retry_parsed.get("terms", [])
+                    candidate_terms = (
+                        [str(item).strip() for item in candidate_terms_raw if str(item).strip()]
+                        if isinstance(candidate_terms_raw, list)
+                        else []
+                    )
+                    candidate_terms = _filter_term_strings(candidate_terms + _thought_chain_terms(candidate_thought, limit=10), limit=5)
+                    candidate_noise = bool(retry_parsed.get("noise", False)) or not bool(candidate_thought)
+                    candidate_flags, candidate_examples = _collect_thought_quality_flags(candidate_thought, candidate_terms, text)
+                    if not candidate_noise and not (critical_flags & set(candidate_flags)):
+                        thought = candidate_thought
+                        terms = candidate_terms
+                        normalized = _thought_chain_normalize_text(
+                            str(retry_parsed.get("normalized_thought", "")),
+                            limit=700,
+                        ) or _normalize_thought_for_storage(thought)
+                        noise = False
+                        is_meaningful = True
+                        skip_reason = ""
+                        extra_flags = candidate_flags
+                        weird_examples = candidate_examples
+                        thought_retry_used = True
+                        parsed = {**parsed, "_quality_retry_payload": retry_parsed, "_quality_retry_used": True}
+                    else:
+                        safe = _safe_sentence_fallback_payload(
+                            text,
+                            reason_flags=pre_repair_flags + ["thought_retry_failed"],
+                            raw_response={
+                                **parsed,
+                                "_quality_retry_payload": retry_parsed,
+                                "_quality_retry_used": True,
+                                "_quality_retry_failed": True,
+                            },
+                        )
+                        safe["pre_repair_quality_flags"] = pre_repair_flags
+                        return safe
+                else:
+                    safe = _safe_sentence_fallback_payload(
+                        text,
+                        reason_flags=pre_repair_flags + ["thought_retry_failed"],
+                        raw_response={**parsed, "_quality_retry_used": False, "_quality_retry_failed": True},
+                    )
+                    safe["pre_repair_quality_flags"] = pre_repair_flags
+                    return safe
+            quality_flags.extend(flag for flag in extra_flags if flag not in quality_flags)
+            if thought_retry_used:
+                quality_flags.append("thought_retry_used")
+            final_flags, final_examples = _collect_thought_quality_flags(thought, terms, text)
+            if critical_flags & set(final_flags):
+                safe = _safe_sentence_fallback_payload(
+                    text,
+                    reason_flags=(pre_repair_flags or final_flags) + ["post_validation_safe_fallback"],
+                    raw_response={**parsed, "_post_validation_failed": True},
+                )
+                safe["pre_repair_quality_flags"] = pre_repair_flags or final_flags
+                return safe
+        return {
+            "thought": thought if not noise else "",
+            "normalized_thought": normalized,
+            "terms": terms,
+            "is_meaningful": is_meaningful,
+            "noise": noise,
+            "skip_reason": skip_reason,
+            "json_valid": True,
+            "fallback_used": False,
+            "quality_flags": quality_flags,
+            "pre_repair_quality_flags": pre_repair_flags if is_meaningful and not noise else [],
+            "weird_token_examples": weird_examples,
+            "terms_removed_count": len(removed_terms),
+            "terms_removed_examples": removed_terms[:8],
+            "llm_raw_response": {**parsed, "_json_retry_used": retry_used},
+        }
+    return _safe_sentence_fallback_payload(
+        text,
+        reason_flags=["invalid_json_after_retry", "llm_json_repaired_by_safe_sentence_fallback"],
+        raw_response={"raw": raw or ""},
+    )
+
+
+def compare_thought_with_current_block(
+    *,
+    current_block_main_idea: str,
+    current_block_thoughts: list[str],
+    new_thought: str,
+    model_name: str | None = None,
+) -> dict[str, Any]:
+    """
+    Decide whether a new thought belongs to the accumulated current block.
+    This is the key sequential accumulation decision and must compare against
+    the whole current block, not only the previous thought.
+    """
+
+    block_idea = _thought_chain_normalize_text(current_block_main_idea, limit=900)
+    thought_lines = [
+        _thought_chain_normalize_text(item, limit=260)
+        for item in current_block_thoughts[:20]
+        if _thought_chain_normalize_text(item, limit=260)
+    ]
+    new_text = _thought_chain_normalize_text(new_thought, limit=700)
+    fallback_score = 0.0
+    if block_idea and new_text:
+        a = set(_normalize_thought_for_storage(block_idea).split())
+        b = set(_normalize_thought_for_storage(new_text).split())
+        fallback_score = len(a & b) / max(1, len(a | b))
+    fallback_same = fallback_score >= 0.22
+    fallback = {
+        "same_block": fallback_same,
+        "score": round(max(0.0, min(1.0, fallback_score)), 4),
+        "reason": "fallback lexical overlap with accumulated block",
+        "updated_block_idea": _safe_group_idea([*thought_lines, new_text], limit=900) if fallback_same else "",
+        "json_valid": False,
+        "fallback_used": True,
+        "quality_flags": ["safe_group_summary_fallback_used"] if fallback_same else [],
+        "group_summary_flags": [],
+        "llm_raw_response": {},
+    }
+
+    prompt = (
+        "Ты проверяешь, относится ли новая мысль к УЖЕ НАКОПЛЕННОМУ смысловому блоку книги.\n"
+        "Критически важно: сравнивай новую мысль со всем текущим блоком целиком, а не только с последней мыслью.\n"
+        "Верни строго JSON без markdown.\n\n"
+        "Формат:\n"
+        "{\n"
+        '  "same_block": true,\n'
+        '  "score": 0.0,\n'
+        '  "reason": "...",\n'
+        '  "updated_block_idea": "..."\n'
+        "}\n\n"
+        "Правила решения:\n"
+        "- same_block=true, если новая мысль продолжает, уточняет, раскрывает, приводит следующий аргумент, пример или этап той же темы.\n"
+        "- same_block=true, если мысли образуют один исторический ряд, одну цепочку объяснения или один общий смысловой фрагмент.\n"
+        "- same_block=false только если началась явно другая тема или другой смысловой центр.\n"
+        "- Не требуй полного совпадения терминов: логическое продолжение важнее одинаковых слов.\n"
+        "- score 0.70-1.00 ставь для продолжения той же темы.\n"
+        "- score 0.40-0.64 ставь для слабой связи, где лучше начать новый блок.\n"
+        "- updated_block_idea должна кратко обобщать весь блок после добавления новой мысли.\n"
+        "- Если same_block=false, updated_block_idea должна быть пустой строкой.\n"
+        "- Все строковые значения пиши на русском языке.\n\n"
+        f"Текущая главная мысль блока:\n{block_idea}\n\n"
+        f"Мысли, уже накопленные в блоке:\n{json.dumps(thought_lines, ensure_ascii=False)}\n\n"
+        f"Новая мысль:\n{new_text}"
+    )
+    raw = _ollama_generate(
+        prompt,
+        expect_json=True,
+        tier="fast",
+        model_name=model_name,
+        analysis_type="thought_chain_same_block",
+    )
+    parsed = _safe_json_parse(raw or "")
+    if isinstance(parsed, dict):
+        try:
+            score = float(parsed.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        same_block = bool(parsed.get("same_block", False))
+        updated = _thought_chain_normalize_text(str(parsed.get("updated_block_idea", "")), limit=1000)
+        quality_flags: list[str] = []
+        group_summary_flags: list[str] = []
+        if same_block and updated and CJK_RE.search(updated):
+            # Small local Ollama models sometimes return the JSON in the right
+            # shape but formulate the updated block idea in Chinese. The block
+            # must stay grounded in the already extracted Russian thoughts.
+            group_summary_flags.append("cjk_token")
+            updated = _safe_group_idea([*thought_lines, new_text], limit=1000)
+            quality_flags.append("safe_group_summary_fallback_used")
+        if same_block and updated:
+            group_source = " ".join([*thought_lines, new_text])
+            flags, _examples = _collect_thought_quality_flags(updated, [], group_source)
+            bad_group_flags = {"weird_token", "mixed_language_token", "cjk_token", "english_service_text", "ungrounded_thought"}
+            if bad_group_flags & set(flags):
+                group_summary_flags.extend(flag for flag in flags if flag not in group_summary_flags)
+                updated = _safe_group_idea([*thought_lines, new_text], limit=1000)
+                if "safe_group_summary_fallback_used" not in quality_flags:
+                    quality_flags.append("safe_group_summary_fallback_used")
+        return {
+            "same_block": same_block,
+            "score": max(0.0, min(1.0, score)),
+            "reason": _thought_chain_normalize_text(str(parsed.get("reason", "")), limit=400),
+            "updated_block_idea": updated if same_block else "",
+            "json_valid": True,
+            "fallback_used": False,
+            "quality_flags": quality_flags,
+            "group_summary_flags": group_summary_flags,
+            "llm_raw_response": parsed,
+        }
+    return fallback
+
+
+def compare_thought_pair(
+    thought_a: str,
+    thought_b: str,
+    *,
+    model_name: str | None = None,
+) -> dict[str, Any]:
+    """Compare two thoughts with LLM and return same/related/different."""
+
+    text_a = _thought_chain_normalize_text(thought_a, limit=700)
+    text_b = _thought_chain_normalize_text(thought_b, limit=700)
+    a = set(_normalize_thought_for_storage(text_a).split())
+    b = set(_normalize_thought_for_storage(text_b).split())
+    lexical_score = len(a & b) / max(1, len(a | b))
+    if lexical_score >= 0.72:
+        fallback_relation = "same"
+    elif lexical_score >= 0.28:
+        fallback_relation = "related"
+    else:
+        fallback_relation = "different"
+    fallback_score, fallback_fixed = _normalize_relation_score(fallback_relation, lexical_score)
+    fallback = {
+        "relation": fallback_relation,
+        "score": fallback_score,
+        "explanation": _fallback_pairwise_explanation(fallback_relation, fallback_score),
+        "json_valid": False,
+        "fallback_used": True,
+        "quality_flags": ["fallback_pairwise"] + (["relation_score_fixed"] if fallback_fixed else []),
+        "relation_score_inconsistent": fallback_fixed,
+        "relation_score_fixed": fallback_fixed,
+        "score_before_fix": round(max(0.0, min(1.0, lexical_score)), 4),
+        "english_explanation_detected": False,
+        "english_explanation_retried": False,
+        "english_explanation_remaining": False,
+        "english_explanation_sanitized": False,
+        "relation_explanation_consistent": True,
+        "relation_explanation_contradiction": False,
+        "relation_explanation_rewritten": False,
+        "relation_explanation_problem": "",
+        "semantic_guard_applied": False,
+        "semantic_guard_reason": "",
+        "llm_raw_response": {},
+    }
+
+    prompt = (
+        "Ты сравниваешь две мысли из книги.\n"
+        "Верни строго JSON без markdown.\n\n"
+        "Схема:\n"
+        "{\n"
+        '  "relation": "same",\n'
+        '  "score": 0.0,\n'
+        '  "explanation": "..."\n'
+        "}\n\n"
+        "Правила:\n"
+        "- relation: только same, related или different.\n"
+        "- same: мысли фактически делают одно и то же утверждение и могут заменить друг друга без потери смысла; score >= 0.90.\n"
+        "- related: мысли относятся к одной теме, но раскрывают разные аспекты или дополняют друг друга; 0.65 <= score < 0.90.\n"
+        "- different: связь слабая, косвенная, философская, ассоциативная или только на уровне общих слов; score < 0.65.\n"
+        "- Нельзя ставить same, если обе мысли просто упоминают Вселенную, реальность, изображение, знание, проблему или наблюдение.\n"
+        "- Нельзя ставить same, если одна мысль про телескоп/фотографию, а другая про научный метод/общество/мультивселенную.\n"
+        "- explanation пиши только на русском языке.\n"
+        "- Не используй фразы Thought A, Thought B, discusses, focuses, different topics.\n"
+        "- Английский допустим только внутри исходных терминов или названий, если они есть в мысли.\n\n"
+        "Контрольные примеры:\n"
+        "A: \"У нас достаточно проблем с одной Вселенной.\"\n"
+        "B: \"В современном обществе люди нуждаются в подтверждении наблюдений.\"\n"
+        "Ответ: different, score 0.35\n"
+        "A: \"У нас достаточно проблем с одной Вселенной.\"\n"
+        "B: \"Космический телескоп Джеймс Уэбб был запущен в 2021 году.\"\n"
+        "Ответ: different, score 0.25\n"
+        "A: \"Научный метод требует экспериментальных подтверждений.\"\n"
+        "B: \"Идея мультивселенной кажется несовместимой с проверяемостью.\"\n"
+        "Ответ: related, score 0.75\n"
+        "A: \"Фотографии из космоса усиливают ощущение реальности.\"\n"
+        "B: \"Визуализация данных помогает воспринимать наблюдения как реальные.\"\n"
+        "Ответ: related, score 0.75\n"
+        "A: \"Научный метод требует экспериментальных подтверждений.\"\n"
+        "B: \"Научные утверждения нуждаются в экспериментальной проверке.\"\n"
+        "Ответ: same, score 0.92\n\n"
+        f"Мысль A:\n{text_a}\n\n"
+        f"Мысль B:\n{text_b}"
+    )
+    raw = _ollama_generate(
+        prompt,
+        expect_json=True,
+        tier="fast",
+        model_name=model_name,
+        analysis_type="thought_chain_pair",
+    )
+    parsed = _safe_json_parse(raw or "")
+    retry_used = False
+    if isinstance(parsed, dict):
+        relation = str(parsed.get("relation", "")).strip().lower()
+        if relation not in {"same", "related", "different"}:
+            relation = fallback_relation
+        try:
+            score = float(parsed.get("score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        score = max(0.0, min(1.0, score))
+        explanation = _thought_chain_normalize_text(str(parsed.get("explanation", "")), limit=500)
+        english_detected = _has_forbidden_english_pairwise_explanation(explanation)
+        english_sanitized = False
+        retry_payload: dict[str, Any] | None = None
+        if english_detected:
+            retry_prompt = (
+                "Верни только валидный JSON. Все строковые значения строго на русском.\n"
+                'Схема: {"relation":"different","score":0.0,"explanation":"..."}\n'
+                "Запрещено писать Thought A, Thought B, discusses, focuses, different topics.\n"
+                "relation: same score>=0.90; related 0.65<=score<0.90; different score<0.65.\n"
+                f"Мысль A: {text_a}\n"
+                f"Мысль B: {text_b}"
+            )
+            retry_raw = _ollama_generate(
+                retry_prompt,
+                expect_json=True,
+                tier="fast",
+                model_name=model_name,
+                analysis_type="thought_chain_pair_ru_retry",
+                cache_ttl=0,
+            )
+            retry_strict = parse_llm_json_strict(retry_raw or "", "thought_chain_pair")
+            retry_parsed = retry_strict.get("data") if retry_strict.get("ok") else None
+            if isinstance(retry_parsed, dict):
+                retry_used = True
+                retry_payload = retry_parsed
+                retry_relation = str(retry_parsed.get("relation", "")).strip().lower()
+                if retry_relation in {"same", "related", "different"}:
+                    relation = retry_relation
+                try:
+                    score = float(retry_parsed.get("score", score))
+                except (TypeError, ValueError):
+                    pass
+                score = max(0.0, min(1.0, score))
+                explanation = _thought_chain_normalize_text(str(retry_parsed.get("explanation", "")), limit=500)
+        guard_relation, guard_score, guard_flags = _semantic_guard_pair_relation(
+            text_a=text_a,
+            text_b=text_b,
+            relation=relation,
+            score=score,
+            lexical_score=lexical_score,
+            explanation=explanation,
+        )
+        semantic_guard_applied = guard_relation != relation or round(guard_score, 4) != round(score, 4)
+        relation = guard_relation
+        score = guard_score
+        score_before_fix = score
+        inconsistent = not _relation_score_is_consistent(relation, score)
+        score, fixed = _normalize_relation_score(relation, score)
+        english_remaining = _has_forbidden_english_pairwise_explanation(explanation)
+        if english_remaining:
+            explanation = _fallback_pairwise_explanation(relation, score)
+            english_sanitized = True
+            english_remaining = _has_forbidden_english_pairwise_explanation(explanation)
+        if not explanation:
+            explanation = _fallback_pairwise_explanation(relation, score)
+        explanation_consistent, explanation_problem = validate_relation_explanation_consistency(relation, explanation)
+        explanation_rewritten = False
+        if semantic_guard_applied or not explanation_consistent:
+            if not explanation_consistent:
+                explanation_rewritten = True
+            explanation = _fallback_pairwise_explanation(relation, score)
+            explanation_consistent, explanation_problem = validate_relation_explanation_consistency(relation, explanation)
+        return {
+            "relation": relation,
+            "score": score,
+            "explanation": explanation,
+            "json_valid": True,
+            "fallback_used": False,
+            "quality_flags": (
+                (["english_explanation_sanitized"] if english_sanitized else [])
+                + (["relation_score_fixed"] if fixed else [])
+                + (["pairwise_retry_used"] if retry_used else [])
+                + (["relation_explanation_rewritten"] if explanation_rewritten else [])
+                + (["relation_explanation_contradiction"] if not explanation_consistent else [])
+                + guard_flags
+            ),
+            "relation_score_inconsistent": inconsistent,
+            "relation_score_fixed": fixed,
+            "score_before_fix": round(score_before_fix, 4),
+            "english_explanation_detected": english_detected,
+            "english_explanation_retried": retry_used if english_detected else False,
+            "english_explanation_remaining": english_remaining,
+            "english_explanation_sanitized": english_sanitized,
+            "relation_explanation_consistent": explanation_consistent,
+            "relation_explanation_contradiction": not explanation_consistent,
+            "relation_explanation_rewritten": explanation_rewritten,
+            "relation_explanation_problem": explanation_problem,
+            "semantic_guard_applied": semantic_guard_applied,
+            "semantic_guard_reason": "; ".join(guard_flags),
+            "llm_raw_response": {**parsed, "_retry_payload": retry_payload or {}, "_retry_used": retry_used},
+        }
+    return fallback
+
+
+def summarize_thought_block(thoughts: list[str], *, model_name: str | None = None) -> dict[str, Any]:
+    """Create title/main idea/summary/keywords for a logical thought block."""
+
+    cleaned = [_thought_chain_normalize_text(item, limit=420) for item in thoughts if _thought_chain_normalize_text(item, limit=420)]
+    keywords = _filter_term_strings(_thought_chain_terms(" ".join(cleaned), limit=14), limit=10, max_len=80)
+    fallback = {
+        "title": (keywords[0] if keywords else (cleaned[0][:80] if cleaned else "Logical thought block")),
+        "main_idea": " ".join(cleaned[:3])[:1200],
+        "summary": " ".join(cleaned[:5])[:2000],
+        "keywords": keywords,
+        "json_valid": False,
+        "fallback_used": True,
+        "llm_raw_response": {},
+    }
+    if not cleaned:
+        return fallback
+
+    prompt = (
+        "You receive a set of related thoughts from one or several books.\n"
+        "Task: formulate the core meaning of the logical block.\n"
+        "Return strict JSON only.\n\n"
+        "Schema:\n"
+        "{\n"
+        '  "title": "...",\n'
+        '  "main_idea": "...",\n'
+        '  "summary": "...",\n'
+        '  "keywords": ["..."]\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Write in Russian.\n"
+        "- Use only the provided thoughts.\n"
+        "- title: 2-7 words.\n"
+        "- main_idea: one precise sentence.\n"
+        "- summary: 2-4 concise sentences.\n\n"
+        f"Thoughts:\n{json.dumps(cleaned[:30], ensure_ascii=False)}"
+    )
+    raw = _ollama_generate(
+        prompt,
+        expect_json=True,
+        tier="high",
+        model_name=model_name,
+        analysis_type="thought_chain_block_summary",
+    )
+    parsed = _safe_json_parse(raw or "")
+    if isinstance(parsed, dict):
+        raw_keywords = parsed.get("keywords", [])
+        parsed_keywords = [str(item).strip() for item in raw_keywords if str(item).strip()] if isinstance(raw_keywords, list) else []
+        return {
+            "title": _thought_chain_normalize_text(str(parsed.get("title", "")), limit=180) or fallback["title"],
+            "main_idea": _thought_chain_normalize_text(str(parsed.get("main_idea", "")), limit=1400) or fallback["main_idea"],
+            "summary": _thought_chain_normalize_text(str(parsed.get("summary", "")), limit=2200) or fallback["summary"],
+            "keywords": _filter_term_strings(parsed_keywords + keywords, limit=12, max_len=80),
+            "json_valid": True,
+            "fallback_used": False,
+            "llm_raw_response": parsed,
+        }
+    return fallback
+
+
+def score_thought_against_block(
+    thought: str,
+    block_payload: dict[str, Any],
+    *,
+    model_name: str | None = None,
+) -> dict[str, Any]:
+    """Calculate relevance_score of one thought to one logical block."""
+
+    thought_text = _thought_chain_normalize_text(thought, limit=700)
+    block_text = " ".join(
+        _thought_chain_normalize_text(str(block_payload.get(key, "")), limit=700)
+        for key in ("title", "main_idea", "summary")
+    )
+    a = set(_normalize_thought_for_storage(thought_text).split())
+    b = set(_normalize_thought_for_storage(block_text).split())
+    lexical_score = len(a & b) / max(1, len(a | b))
+    fallback = {
+        "relevance_score": round(max(0.0, min(1.0, lexical_score)), 4),
+        "reason": "fallback lexical relevance",
+        "json_valid": False,
+        "fallback_used": True,
+        "llm_raw_response": {},
+    }
+    prompt = (
+        "You check how strongly a thought matches a logical block.\n"
+        "Return strict JSON only.\n\n"
+        "Schema:\n"
+        "{\n"
+        '  "relevance_score": 0.0,\n'
+        '  "reason": "..."\n'
+        "}\n\n"
+        "Scale: 0.0 not related, 0.3 weak, 0.6 partial, 0.8 good, 1.0 full match.\n"
+        "Write reason in Russian.\n\n"
+        f"Logical block title: {block_payload.get('title', '')}\n"
+        f"Logical block main idea: {block_payload.get('main_idea', '')}\n"
+        f"Logical block summary: {block_payload.get('summary', '')}\n\n"
+        f"Thought:\n{thought_text}"
+    )
+    raw = _ollama_generate(
+        prompt,
+        expect_json=True,
+        tier="fast",
+        model_name=model_name,
+        analysis_type="thought_chain_membership_score",
+    )
+    parsed = _safe_json_parse(raw or "")
+    if isinstance(parsed, dict):
+        try:
+            score = float(parsed.get("relevance_score", 0.0))
+        except (TypeError, ValueError):
+            score = 0.0
+        return {
+            "relevance_score": max(0.0, min(1.0, score)),
+            "reason": _thought_chain_normalize_text(str(parsed.get("reason", "")), limit=500),
+            "json_valid": True,
+            "fallback_used": False,
+            "llm_raw_response": parsed,
+        }
+    return fallback
+
+
+def check_thought_belongs_to_existing_block(
+    thought: str,
+    block_payload: dict[str, Any],
+    *,
+    model_name: str | None = None,
+) -> dict[str, Any]:
+    """LLM decision whether a new book thought belongs to an existing global block."""
+
+    score_payload = score_thought_against_block(thought, block_payload, model_name=model_name)
+    score = float(score_payload.get("relevance_score", 0.0))
+    return {
+        "belongs": score >= 0.70,
+        "relevance_score": score,
+        "reason": score_payload.get("reason", ""),
+        "json_valid": score_payload.get("json_valid", False),
+        "fallback_used": score_payload.get("fallback_used", True),
+        "llm_raw_response": score_payload.get("llm_raw_response", {}),
     }

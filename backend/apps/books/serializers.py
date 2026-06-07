@@ -13,6 +13,11 @@ from apps.books.models import (
 class UserBookSerializer(serializers.ModelSerializer):
     logical_blocks_count = serializers.SerializerMethodField()
     concepts_count = serializers.SerializerMethodField()
+    thought_sentences_count = serializers.SerializerMethodField()
+    sentence_thoughts_count = serializers.SerializerMethodField()
+    sequential_groups_count = serializers.SerializerMethodField()
+    thought_relations_count = serializers.SerializerMethodField()
+    global_thought_blocks_count = serializers.SerializerMethodField()
     current_batch_index = serializers.SerializerMethodField()
     sections_processed = serializers.SerializerMethodField()
     sections_total = serializers.SerializerMethodField()
@@ -45,6 +50,11 @@ class UserBookSerializer(serializers.ModelSerializer):
             "sections_total",
             "logical_blocks_count",
             "concepts_count",
+            "thought_sentences_count",
+            "sentence_thoughts_count",
+            "sequential_groups_count",
+            "thought_relations_count",
+            "global_thought_blocks_count",
         )
 
     def get_logical_blocks_count(self, obj):
@@ -56,6 +66,33 @@ class UserBookSerializer(serializers.ModelSerializer):
         if not obj.global_cache_id:
             return 0
         return obj.global_cache.concept_mentions.count()
+
+    def get_thought_sentences_count(self, obj):
+        if not obj.global_cache_id:
+            return 0
+        return obj.global_cache.sentences.count()
+
+    def get_sentence_thoughts_count(self, obj):
+        if not obj.global_cache_id:
+            return 0
+        return obj.global_cache.sentence_thoughts.count()
+
+    def get_sequential_groups_count(self, obj):
+        if not obj.global_cache_id:
+            return 0
+        return obj.global_cache.sequential_thought_groups.count()
+
+    def get_thought_relations_count(self, obj):
+        if not obj.global_cache_id:
+            return 0
+        from apps.books.models import ThoughtRelation
+
+        return ThoughtRelation.objects.filter(source_thought__global_book_id=obj.global_cache_id).count()
+
+    def get_global_thought_blocks_count(self, obj):
+        from apps.books.models import GlobalLogicalThoughtBlock
+
+        return GlobalLogicalThoughtBlock.objects.filter(source_books=obj).distinct().count()
 
     def _latest_run(self, obj):
         if not obj.global_cache_id:

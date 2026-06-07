@@ -309,6 +309,192 @@ class LLMBookAnalysis(models.Model):
         return f"{self.global_book_id}:{self.mode}:{self.json_valid}"
 
 
+class BookSentence(models.Model):
+    book = models.ForeignKey(UserBook, on_delete=models.CASCADE, related_name="sentences")
+    global_book = models.ForeignKey(GlobalBookCache, on_delete=models.CASCADE, related_name="sentences")
+    index = models.PositiveIntegerField()
+    text = models.TextField()
+    source_start = models.PositiveIntegerField(null=True, blank=True)
+    source_end = models.PositiveIntegerField(null=True, blank=True)
+    chapter_title = models.CharField(max_length=512, blank=True)
+    section_title = models.CharField(max_length=512, blank=True)
+    paragraph_index = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("index",)
+        unique_together = ("global_book", "index")
+        indexes = [
+            models.Index(fields=("book", "index")),
+            models.Index(fields=("global_book", "chapter_title")),
+        ]
+
+    def __str__(self):
+        return f"{self.global_book_id}:s{self.index}"
+
+
+class SentenceThought(models.Model):
+    sentence = models.OneToOneField(BookSentence, on_delete=models.CASCADE, related_name="thought")
+    book = models.ForeignKey(UserBook, on_delete=models.CASCADE, related_name="sentence_thoughts")
+    global_book = models.ForeignKey(GlobalBookCache, on_delete=models.CASCADE, related_name="sentence_thoughts")
+    index = models.PositiveIntegerField()
+    thought_text = models.TextField()
+    normalized_thought = models.TextField(blank=True)
+    terms = models.JSONField(default=list, blank=True)
+    is_meaningful = models.BooleanField(default=True)
+    noise = models.BooleanField(default=False)
+    skip_reason = models.TextField(blank=True)
+    quality_flags = models.JSONField(default=list, blank=True)
+    llm_raw_response = models.JSONField(default=dict, blank=True)
+    json_valid = models.BooleanField(default=True)
+    fallback_used = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("index",)
+        unique_together = ("global_book", "index")
+        indexes = [
+            models.Index(fields=("book", "is_meaningful")),
+            models.Index(fields=("book", "noise")),
+            models.Index(fields=("global_book", "index")),
+        ]
+
+    def __str__(self):
+        return f"{self.global_book_id}:t{self.index}"
+
+
+class SequentialThoughtGroup(models.Model):
+    book = models.ForeignKey(UserBook, on_delete=models.CASCADE, related_name="sequential_thought_groups")
+    global_book = models.ForeignKey(GlobalBookCache, on_delete=models.CASCADE, related_name="sequential_thought_groups")
+    index = models.PositiveIntegerField()
+    start_sentence_index = models.PositiveIntegerField()
+    end_sentence_index = models.PositiveIntegerField()
+    main_thought = models.TextField()
+    sentence_indexes = models.JSONField(default=list)
+    thought_ids = models.JSONField(default=list)
+    llm_raw_response = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("index",)
+        unique_together = ("global_book", "index")
+        indexes = [
+            models.Index(fields=("book", "index")),
+            models.Index(fields=("global_book", "start_sentence_index")),
+        ]
+
+    def __str__(self):
+        return f"{self.global_book_id}:group{self.index}"
+
+
+class ThoughtRelation(models.Model):
+    RELATION_SAME = "same"
+    RELATION_RELATED = "related"
+    RELATION_DIFFERENT = "different"
+    RELATION_CHOICES = (
+        (RELATION_SAME, "Same"),
+        (RELATION_RELATED, "Related"),
+        (RELATION_DIFFERENT, "Different"),
+    )
+
+    source_thought = models.ForeignKey(SentenceThought, on_delete=models.CASCADE, related_name="outgoing_relations")
+    target_thought = models.ForeignKey(SentenceThought, on_delete=models.CASCADE, related_name="incoming_relations")
+    relation = models.CharField(max_length=32, choices=RELATION_CHOICES)
+    score = models.FloatField(default=0.0)
+    explanation = models.TextField(blank=True)
+    llm_raw_response = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("source_thought", "target_thought")
+        indexes = [
+            models.Index(fields=("relation", "score")),
+            models.Index(fields=("source_thought", "target_thought")),
+        ]
+
+    def __str__(self):
+        return f"{self.source_thought_id}->{self.target_thought_id}:{self.relation}:{self.score:.2f}"
+
+
+class GlobalLogicalThoughtBlock(models.Model):
+    title = models.CharField(max_length=512)
+    main_idea = models.TextField()
+    summary = models.TextField(blank=True)
+    keywords = models.JSONField(default=list, blank=True)
+    is_merged = models.BooleanField(default=False)
+    merged_into = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="merged_sources",
+    )
+    source_books = models.ManyToManyField(UserBook, related_name="global_thought_blocks", blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("title", "id")
+
+    def __str__(self):
+        return self.title
+
+
+class ThoughtBlockMembership(models.Model):
+    thought = models.ForeignKey(SentenceThought, on_delete=models.CASCADE, related_name="block_memberships")
+    block = models.ForeignKey(GlobalLogicalThoughtBlock, on_delete=models.CASCADE, related_name="memberships")
+    relevance_score = models.FloatField(default=0.0)
+    reason = models.TextField(blank=True)
+    llm_raw_response = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("thought", "block")
+        indexes = [
+            models.Index(fields=("block", "relevance_score")),
+            models.Index(fields=("thought",)),
+        ]
+
+    def __str__(self):
+        return f"{self.thought_id}->{self.block_id}:{self.relevance_score:.2f}"
+
+
+class ThoughtChainAnalysisRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        READY = "ready", "Ready"
+        PARTIAL_READY = "partial_ready", "Partial Ready"
+        FAILED = "failed", "Failed"
+        DRY_RUN = "dry_run", "Dry Run"
+
+    book = models.ForeignKey(UserBook, on_delete=models.CASCADE, related_name="thought_chain_runs")
+    status = models.CharField(max_length=32, choices=Status.choices, default=Status.PENDING)
+    model_name = models.CharField(max_length=100, blank=True)
+    total_sentences = models.PositiveIntegerField(default=0)
+    processed_sentences = models.PositiveIntegerField(default=0)
+    total_thoughts = models.PositiveIntegerField(default=0)
+    total_relations_checked = models.PositiveIntegerField(default=0)
+    total_relations_created = models.PositiveIntegerField(default=0)
+    total_blocks_created = models.PositiveIntegerField(default=0)
+    checkpoint = models.JSONField(default=dict, blank=True)
+    report = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=("book", "status")),
+            models.Index(fields=("created_at",)),
+        ]
+
+    def __str__(self):
+        return f"thought_chain:{self.book_id}:{self.status}:{self.id}"
+
+
 class LogicalBlock(models.Model):
     global_book = models.ForeignKey(GlobalBookCache, on_delete=models.CASCADE, related_name="logical_blocks")
     title = models.CharField(max_length=512)

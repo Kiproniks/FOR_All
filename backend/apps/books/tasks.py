@@ -13,12 +13,17 @@ from django.utils import timezone
 
 from apps.books.models import (
     BookSummary,
+    BookSentence,
     BookTheme,
     Concept,
     ConceptMention,
     GlobalBookCache,
+    GlobalLogicalThoughtBlock,
     LogicalBlock,
+    SentenceThought,
+    SequentialThoughtGroup,
     ThemeSubtopic,
+    ThoughtRelation,
     UserBook,
 )
 from apps.books.services.analysis_quality import evaluate_analysis_quality
@@ -54,6 +59,7 @@ from apps.books.services.structure_detector import build_canonical_outline
 from apps.books.services.theme_hierarchy import build_theme_hierarchy
 from apps.books.services.thought_clusterer import cluster_atomic_thoughts
 from apps.books.services.thought_quality import clean_and_validate_thoughts
+from apps.books.services.thought_chain.thought_chain_runner import run_thought_chain_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +97,7 @@ class PreparedBlock:
 
 
 def _resolve_analysis_mode(requested_mode: str | None) -> str:
-    mode = (requested_mode or os.getenv("BOOK_ANALYSIS_MODE", "llm_fast_batched")).strip().lower()
+    mode = (requested_mode or os.getenv("BOOK_ANALYSIS_MODE", "llm_thought_chain")).strip().lower()
     aliases = {
         "semantic": "semantic_fast",
         "full": "llm_full",
@@ -106,9 +112,10 @@ def _resolve_analysis_mode(requested_mode: str | None) -> str:
         "llm_preview",
         "llm_full",
         "llm_fast_batched",
+        "llm_thought_chain",
         "repair_stuck",
     }:
-        return "llm_fast_batched"
+        return "llm_thought_chain"
     return mode
 
 
@@ -144,6 +151,8 @@ def _analysis_is_ready(cache: GlobalBookCache, *, required_mode: str | None = No
         return pipeline == "llm_full"
     if required_mode == "llm_fast_batched":
         return pipeline == "llm_fast_batched"
+    if required_mode == "llm_thought_chain":
+        return pipeline == "llm_thought_chain" and cache.sentences.exists() and cache.sequential_thought_groups.exists()
     if required_mode == "llm_preview":
         return pipeline in {"llm_preview", "llm_full", "llm_fast_batched"}
     if required_mode == "debug_structure":
@@ -478,6 +487,173 @@ def _prepare_semantic_fast_blocks(parsed) -> tuple[list[PreparedBlock], dict[str
         metrics["llm_calls"],
     )
 
+    return prepared, semantic_map, metrics
+
+
+def _prepare_thought_chain_blocks(
+    *,
+    user_book: UserBook,
+    cache: GlobalBookCache,
+    parsed: Any,
+    model_name: str | None = None,
+) -> tuple[list[PreparedBlock], dict[str, Any], dict[str, Any]]:
+    max_sentences = int(os.getenv("THOUGHT_CHAIN_MAX_SENTENCES", "0")) or None
+    max_pairs = int(os.getenv("THOUGHT_CHAIN_MAX_PAIRS", "0")) or None
+    report = run_thought_chain_analysis(
+        book=user_book,
+        parsed_book=parsed,
+        global_book=cache,
+        model_name=model_name,
+        max_sentences=max_sentences,
+        max_pairs=max_pairs,
+        skip_pairwise=os.getenv("THOUGHT_CHAIN_SKIP_PAIRWISE", "false").strip().lower() in {"1", "true", "yes", "on"},
+        skip_global_blocks=os.getenv("THOUGHT_CHAIN_SKIP_GLOBAL_BLOCKS", "false").strip().lower() in {"1", "true", "yes", "on"},
+        force_refresh=True,
+        resume=False,
+    )
+
+    sentence_by_index = {
+        item.index: item
+        for item in BookSentence.objects.filter(global_book=cache).order_by("index")
+    }
+    thoughts_by_id = {
+        item.id: item
+        for item in SentenceThought.objects.filter(global_book=cache).order_by("index")
+    }
+
+    prepared: list[PreparedBlock] = []
+    for group in SequentialThoughtGroup.objects.filter(global_book=cache).order_by("index"):
+        sentence_indexes = [int(value) for value in group.sentence_indexes if str(value).isdigit()]
+        sentences = [sentence_by_index[idx] for idx in sentence_indexes if idx in sentence_by_index]
+        if not sentences:
+            continue
+        thought_ids = [int(value) for value in group.thought_ids if str(value).isdigit()]
+        thoughts = [thoughts_by_id[item_id] for item_id in thought_ids if item_id in thoughts_by_id]
+        source_text = "\n".join(item.text for item in sentences if item.text).strip()
+        if not source_text:
+            continue
+        terms: list[str] = []
+        thought_payload = []
+        for thought in thoughts:
+            terms.extend(str(term).strip() for term in (thought.terms or []) if str(term).strip())
+            thought_payload.append(
+                {
+                    "id": thought.id,
+                    "index": thought.index,
+                    "sentence_index": thought.sentence.index if thought.sentence_id else thought.index,
+                    "thought": thought.thought_text,
+                    "terms": thought.terms or [],
+                    "fallback_used": thought.fallback_used,
+                    "json_valid": thought.json_valid,
+                }
+            )
+        title = (group.main_thought or "").strip().split(".")[0][:120] or f"Thought group {group.index}"
+        prepared.append(
+            PreparedBlock(
+                title=title[:512],
+                order_number=group.index,
+                source_text=source_text,
+                short_summary=group.main_thought,
+                chapter_title=sentences[0].chapter_title if sentences else "",
+                start_paragraph=min(item.paragraph_index for item in sentences),
+                end_paragraph=max(item.paragraph_index for item in sentences),
+                token_count=len(source_text.split()),
+                source_sentence_ids=[f"s{item.index}" for item in sentences],
+                concept_candidates=list(dict.fromkeys(terms))[:12],
+                thought_cluster_ids=[str(item.id) for item in thoughts],
+                semantic_data={
+                    "pipeline": "llm_thought_chain",
+                    "sequential_group_id": group.id,
+                    "main_meaning": group.main_thought,
+                    "thoughts": thought_payload,
+                    "clean_text_for_analysis": source_text,
+                    "section_title": sentences[0].section_title if sentences else "",
+                    "section_path": [],
+                    "sentence_indexes": sentence_indexes,
+                    "thought_ids": thought_ids,
+                },
+            )
+        )
+
+    if not prepared:
+        raise ValueError("llm_thought_chain produced no sequential logical blocks")
+
+    relation_links = []
+    for relation in ThoughtRelation.objects.filter(source_thought__global_book=cache).select_related("source_thought", "target_thought")[:500]:
+        if relation.relation not in {"same", "related"} or relation.score < 0.65:
+            continue
+        relation_links.append(
+            {
+                "from_thought": relation.source_thought_id,
+                "to_thought": relation.target_thought_id,
+                "relation": relation.relation,
+                "score": round(float(relation.score), 4),
+                "reason": relation.explanation[:240],
+            }
+        )
+
+    global_blocks = []
+    for block in GlobalLogicalThoughtBlock.objects.filter(source_books=user_book).prefetch_related("memberships")[:200]:
+        global_blocks.append(
+            {
+                "id": block.id,
+                "title": block.title,
+                "main_idea": block.main_idea,
+                "summary": block.summary,
+                "keywords": block.keywords or [],
+                "thoughts_count": block.memberships.count(),
+            }
+        )
+
+    semantic_map = {
+        "book_title": parsed.title,
+        "mode": "llm_thought_chain",
+        "blocks": [
+            {
+                "order": item.order_number,
+                "title": item.title,
+                "main_meaning": item.short_summary,
+                "source_range": (
+                    f"{item.source_sentence_ids[0]}-{item.source_sentence_ids[-1]}"
+                    if item.source_sentence_ids
+                    else ""
+                ),
+                "concepts": item.concept_candidates,
+                "children": [
+                    {"thought": thought.get("thought", ""), "source_sentence_ids": [f"s{thought.get('sentence_index')}"]}
+                    for thought in item.semantic_data.get("thoughts", [])
+                ],
+            }
+            for item in prepared
+        ],
+        "thought_links": relation_links,
+        "global_thought_blocks": global_blocks,
+        "links": [],
+    }
+
+    metrics = {
+        "pipeline": "llm_thought_chain",
+        "logical_blocks_count": len(prepared),
+        "thought_chain_report": report,
+        "sentences_count": report.get("total_sentences", 0),
+        "thoughts_count": report.get("thoughts_created", 0),
+        "meaningful_sentences": report.get("meaningful_sentences", 0),
+        "sequential_groups_count": report.get("sequential_groups_created", 0),
+        "pairwise_comparisons_done": report.get("pairwise_comparisons_done", 0),
+        "relations_created": report.get("relations_created", 0),
+        "global_blocks_created": report.get("global_blocks_created", 0),
+        "memberships_created": report.get("memberships_created", 0),
+        "avg_membership_score": report.get("avg_membership_score", 0.0),
+        "llm_calls": (
+            report.get("thoughts_created", 0)
+            + report.get("sequential_groups_created", 0)
+            + report.get("pairwise_comparisons_done", 0)
+            + report.get("memberships_created", 0)
+            + report.get("global_blocks_created", 0)
+        ),
+        "fallback_calls": report.get("fallback_count", 0),
+        "llm_failures": report.get("invalid_json_count", 0),
+    }
     return prepared, semantic_map, metrics
 
 
@@ -974,6 +1150,7 @@ def _save_cache_summary(
         "llm_preview": "concept_rag_llm_preview_v1",
         "llm_full": "concept_rag_llm_full_v1",
         "llm_fast_batched": "concept_rag_llm_fast_batched_v1",
+        "llm_thought_chain": "thought_chain_v1",
     }.get(pipeline_used, "concept_rag_classic_improved_v1")
 
     content_filter_stats = pipeline_metrics.get("content_filter_stats", {}) if isinstance(pipeline_metrics, dict) else {}
@@ -1055,7 +1232,7 @@ def analyze_book_task(
             analysis_mode=mode,
         )
 
-        llm_required = mode in {"llm_preview", "llm_full", "llm_fast_batched"}
+        llm_required = mode in {"llm_preview", "llm_full", "llm_fast_batched", "llm_thought_chain"}
         if llm_required:
             ready = ensure_llm_ready(require_enabled=True)
             if not ready.get("ok"):
@@ -1141,6 +1318,29 @@ def analyze_book_task(
                 status=UserBook.Status.LLM_BOOK_ANALYSIS,
                 stage="llm_book_analysis",
                 progress=70,
+                llm_calls_delta=int(pipeline_metrics.get("llm_calls", 0)),
+                llm_failures_delta=int(pipeline_metrics.get("llm_failures", 0)),
+                fallback_delta=int(pipeline_metrics.get("fallback_calls", 0)),
+            )
+        elif mode == "llm_thought_chain":
+            _set_book_stage(
+                user_book,
+                status=UserBook.Status.CHUNKING,
+                stage="thought_chain_sentence_split",
+                progress=30,
+            )
+            prepared_blocks, semantic_map, pipeline_metrics = _prepare_thought_chain_blocks(
+                user_book=user_book,
+                cache=cache,
+                parsed=parsed,
+                model_name=user_book.llm_model_used or None,
+            )
+            pipeline_used = "llm_thought_chain"
+            _set_book_stage(
+                user_book,
+                status=UserBook.Status.LLM_SECTION_ANALYSIS,
+                stage="thought_chain_analysis",
+                progress=72,
                 llm_calls_delta=int(pipeline_metrics.get("llm_calls", 0)),
                 llm_failures_delta=int(pipeline_metrics.get("llm_failures", 0)),
                 fallback_delta=int(pipeline_metrics.get("fallback_calls", 0)),
@@ -1311,6 +1511,13 @@ def watchdog_stuck_books_task(self, timeout_minutes: int | None = None) -> dict[
     if updated_ids:
         logger.warning("watchdog_stuck_books_task marked failed_timeout ids=%s", updated_ids)
     return {"updated_count": len(updated_ids), "updated_ids": updated_ids, "timeout_minutes": timeout}
+
+
+@shared_task(bind=True)
+def run_thought_chain_analysis_task(self, user_book_id: int, force_reanalyze: bool = True) -> Any:
+    """Celery entrypoint for the default LLM thought-chain mode."""
+
+    return analyze_book_task(user_book_id, force_reanalyze=force_reanalyze, analysis_mode="llm_thought_chain")
 
 
 @shared_task(bind=True)

@@ -15,12 +15,17 @@ from django.views.decorators.http import require_GET, require_POST
 from apps.accounts.models import User
 from apps.books.models import (
     BookStudyNotes,
+    BookSentence,
     BookTheme,
     Concept,
     ConceptMention,
+    GlobalLogicalThoughtBlock,
     LLMSectionAnalysis,
     LogicalBlock,
+    SentenceThought,
+    SequentialThoughtGroup,
     ThemeSubtopic,
+    ThoughtRelation,
     UserBook,
     UserConceptEdit,
 )
@@ -129,9 +134,13 @@ def library_view(request):
         if book.global_cache_id:
             book.logical_blocks_count = book.global_cache.logical_blocks.count()
             book.concepts_count = book.global_cache.concept_mentions.count()
+            book.thoughts_count = book.global_cache.sentence_thoughts.count()
+            book.sequential_groups_count = book.global_cache.sequential_thought_groups.count()
         else:
             book.logical_blocks_count = 0
             book.concepts_count = 0
+            book.thoughts_count = 0
+            book.sequential_groups_count = 0
 
     return render(
         request,
@@ -217,7 +226,12 @@ def upload_books_view(request):
             .first()
         )
         global_cache = cached.global_cache if cached else None
-        has_cache_result = bool(global_cache and global_cache.logical_blocks.exists() and global_cache.themes.exists())
+        cache_metadata = global_cache.metadata if global_cache and isinstance(global_cache.metadata, dict) else {}
+        has_cache_result = bool(
+            global_cache
+            and global_cache.logical_blocks.exists()
+            and cache_metadata.get("pipeline_used") == "llm_thought_chain"
+        )
 
         if has_cache_result:
             UserBook.objects.create(
@@ -299,6 +313,18 @@ def book_summary_view(request, book_id: int):
     blocks = []
     mentions = []
     themes = []
+    thought_stats = {
+        "sentences": 0,
+        "thoughts": 0,
+        "sequential_groups": 0,
+        "relations": 0,
+        "global_blocks": 0,
+        "memberships": 0,
+        "latest_run": None,
+    }
+    thought_groups = []
+    thought_relations = []
+    global_thought_blocks = []
     if book.global_cache_id:
         blocks = (
             LogicalBlock.objects.filter(global_book_id=book.global_cache_id)
@@ -315,6 +341,30 @@ def book_summary_view(request, book_id: int):
             .select_related("concept", "logical_block")
             .order_by("-importance_score", "concept__name")
         )
+        thought_qs = SentenceThought.objects.filter(global_book_id=book.global_cache_id)
+        thought_stats = {
+            "sentences": BookSentence.objects.filter(global_book_id=book.global_cache_id).count(),
+            "thoughts": thought_qs.count(),
+            "sequential_groups": SequentialThoughtGroup.objects.filter(global_book_id=book.global_cache_id).count(),
+            "relations": ThoughtRelation.objects.filter(source_thought__global_book_id=book.global_cache_id).count(),
+            "global_blocks": GlobalLogicalThoughtBlock.objects.filter(source_books=book).distinct().count(),
+            "memberships": thought_qs.filter(block_memberships__isnull=False).distinct().count(),
+            "latest_run": book.thought_chain_runs.order_by("-created_at").first(),
+        }
+        thought_groups = (
+            SequentialThoughtGroup.objects.filter(global_book_id=book.global_cache_id)
+            .order_by("index")[:20]
+        )
+        thought_relations = (
+            ThoughtRelation.objects.filter(source_thought__global_book_id=book.global_cache_id)
+            .select_related("source_thought", "target_thought")
+            .order_by("-score")[:30]
+        )
+        global_thought_blocks = (
+            GlobalLogicalThoughtBlock.objects.filter(source_books=book)
+            .prefetch_related("memberships__thought")
+            .distinct()[:20]
+        )
 
     return render(
         request,
@@ -325,6 +375,10 @@ def book_summary_view(request, book_id: int):
             "blocks": blocks,
             "themes": themes,
             "mentions": mentions,
+            "thought_stats": thought_stats,
+            "thought_groups": thought_groups,
+            "thought_relations": thought_relations,
+            "global_thought_blocks": global_thought_blocks,
         },
     )
 

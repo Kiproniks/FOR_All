@@ -251,3 +251,95 @@ Get-NetTCPConnection -LocalPort 8000
 ### Тесты падают из-за PostgreSQL test database
 
 Нужно выдать PostgreSQL-пользователю право `CREATEDB` или запускать тесты от пользователя с такими правами.
+
+## Новый основной режим: llm_thought_chain
+
+По умолчанию анализ запускается в режиме `llm_thought_chain`.
+
+Ключевая логика:
+
+```text
+sentence -> thought -> compare thought with accumulated current_block -> append or close group
+```
+
+Важно: новая мысль сравнивается со всем накопленным блоком, а не только с предыдущим предложением.
+
+Проверка без записи в БД:
+
+```powershell
+cd C:\Users\1\Desktop\НИКОЛАЕВ\backend
+.\venv\Scripts\python.exe manage.py run_thought_chain_analysis --file "C:\Users\1\Desktop\НИКОЛАЕВ\Компьютерныее сети.fb2" --max-sentences 30 --dry-run --max-pairs 60
+```
+
+Если Ollama не запущена, команда остановится с понятной ошибкой. Это нормально: режим должен быть LLM-based, а не fallback-preview.
+
+Legacy-режим можно запускать отдельно:
+
+```powershell
+.\venv\Scripts\python.exe manage.py run_llm_fast_batched_analysis --file "C:\Users\1\Desktop\НИКОЛАЕВ\Компьютерныее сети.fb2" --batch-size 5
+```
+
+---
+
+## Thought-chain quick start
+
+The default full-analysis script now uses fast greedy thought grouping.
+
+### Check the plan without running analysis
+
+```powershell
+.\run_all_thought_chain_books.ps1 -DryPlan
+```
+
+This prints the books and exact commands. It does not call Ollama, does not run analysis, and does not write DB data.
+
+### Run full greedy analysis
+
+Put local FB2 books into:
+
+```text
+test_books/new/
+```
+
+Then run:
+
+```powershell
+.\run_all_thought_chain_books.ps1
+```
+
+Default mode:
+
+```text
+--full --strict --mode greedy --merge-same-title-blocks --resume
+```
+
+### Run strict pairwise analysis
+
+Use this only for small tests because it compares every thought with every other thought through the LLM:
+
+```powershell
+.\run_all_thought_chain_books.ps1 -StrictPairwise
+```
+
+### Demo result
+
+The committed demo book and ready-made result snapshot are here:
+
+```text
+test_books/demo/test.fb2
+demo_results/test_fb2_greedy/
+```
+
+The demo result was already processed and should not be re-run just for packaging.
+
+### Output location
+
+Full local runs write reports here:
+
+```text
+test_runs/thought_chain/full_auto/
+```
+
+### Git safety
+
+Do not commit real books from `test_books/new/` or `test_books/old/`. Do not commit `.env`, `backend/venv/`, `postgres_data/`, `media/`, logs, PID files, or large generated reports.

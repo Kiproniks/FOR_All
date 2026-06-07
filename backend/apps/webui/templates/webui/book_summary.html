@@ -49,6 +49,49 @@
     </div>
 </section>
 
+<section class="card">
+    <div class="row">
+        <div class="grow">
+            <h2>Thought-chain analysis</h2>
+            <p class="muted">Sequential sentence-level mode: sentence -> thought -> accumulated current block -> LLM same-block decision.</p>
+        </div>
+        <span class="badge">Analysis mode: {{ book.analysis_mode|default:"-" }}</span>
+    </div>
+    <div class="stat-grid compact">
+        <div class="metric-card">
+            <div class="metric-label">Sentences</div>
+            <div class="metric-value">{{ thought_stats.sentences }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Thoughts</div>
+            <div class="metric-value">{{ thought_stats.thoughts }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Sequential groups</div>
+            <div class="metric-value">{{ thought_stats.sequential_groups }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Thought relations</div>
+            <div class="metric-value">{{ thought_stats.relations }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Global thought blocks</div>
+            <div class="metric-value">{{ thought_stats.global_blocks }}</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Memberships</div>
+            <div class="metric-value">{{ thought_stats.memberships }}</div>
+        </div>
+    </div>
+    {% if thought_stats.latest_run %}
+        <p class="muted">
+            Latest thought-chain run: {{ thought_stats.latest_run.status }},
+            processed {{ thought_stats.latest_run.processed_sentences }}/{{ thought_stats.latest_run.total_sentences }},
+            blocks {{ thought_stats.latest_run.total_blocks_created }}.
+        </p>
+    {% endif %}
+</section>
+
 {% if book.error_message %}
     <section class="alert warning">{{ book.error_message }}</section>
 {% endif %}
@@ -79,6 +122,90 @@
             <h3>Summary is empty</h3>
             <p class="muted">Analysis may still be processing or source text was not extracted.</p>
         </div>
+    {% endif %}
+</section>
+
+<section class="card">
+    <div class="row">
+        <div class="grow">
+            <h2>Sequential Thought Groups</h2>
+            <p class="muted">These are the first-stage accumulated blocks. Every next thought was compared with the whole current block, not only with the previous sentence.</p>
+        </div>
+    </div>
+    {% if thought_groups %}
+        <div class="section-grid">
+            {% for group in thought_groups %}
+                <article class="block-card">
+                    <div class="card-title-row">
+                        <h3>Group {{ group.index }}</h3>
+                        <span class="badge">sentences {{ group.start_sentence_index }}-{{ group.end_sentence_index }}</span>
+                    </div>
+                    <div class="summary-text">{{ group.main_thought|linebreaks }}</div>
+                    <p class="muted">Thought ids: {{ group.thought_ids|join:", " }}</p>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state"><p class="muted">No thought-chain groups saved yet.</p></div>
+    {% endif %}
+</section>
+
+<section class="card">
+    <h2>Top Thought Relations</h2>
+    {% if thought_relations %}
+        <div class="table-wrap">
+            <table>
+                <thead>
+                <tr>
+                    <th>A</th>
+                    <th>B</th>
+                    <th>Relation</th>
+                    <th>Score</th>
+                    <th>Reason</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for relation in thought_relations %}
+                    <tr>
+                        <td>{{ relation.source_thought.thought_text|truncatechars:120 }}</td>
+                        <td>{{ relation.target_thought.thought_text|truncatechars:120 }}</td>
+                        <td><span class="badge">{{ relation.relation }}</span></td>
+                        <td>{{ relation.score|floatformat:2 }}</td>
+                        <td>{{ relation.explanation|truncatechars:180 }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty-state"><p class="muted">No pairwise thought relations saved yet.</p></div>
+    {% endif %}
+</section>
+
+<section class="card">
+    <h2>Global Logical Thought Blocks</h2>
+    {% if global_thought_blocks %}
+        <div class="section-grid">
+            {% for block in global_thought_blocks %}
+                <article class="theme-card">
+                    <div class="card-title-row">
+                        <h3>{{ block.title }}</h3>
+                        <span class="badge">{{ block.memberships.count }} thoughts</span>
+                    </div>
+                    <div class="summary-text">{{ block.main_idea|linebreaks }}</div>
+                    <p class="muted">{{ block.summary|truncatechars:320 }}</p>
+                    {% if block.keywords %}
+                        <div class="pill-list">
+                            {% for keyword in block.keywords|slice:":8" %}
+                                <span class="pill">{{ keyword }}</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state"><p class="muted">No global thought blocks saved yet.</p></div>
     {% endif %}
 </section>
 

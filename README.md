@@ -287,3 +287,182 @@ Get-NetTCPConnection -LocalPort 8000
 - загруженные книги `.fb2/.pdf/.epub/.djvu`.
 - LLM/audit/debug отчёты.
 - `postgres_data/`, `run_logs/`, cache folders.
+
+## Thought-chain analysis mode
+
+Default book analysis mode is now `llm_thought_chain`.
+
+This mode is intentionally sentence/thought based, not chapter-only:
+
+1. The parsed book is split into source-aware sentences.
+2. LLM extracts one main thought from each sentence.
+3. The next thought is compared with the whole accumulated `current_block`, not only with the previous sentence.
+4. If `same_block=true` and score is above `THOUGHT_SAME_BLOCK_THRESHOLD`, the thought is appended and the block main idea is updated.
+5. If the new thought does not fit, the current sequential group is closed and a new group starts from the new thought.
+6. Meaningful thoughts are compared pairwise by LLM and stored as `ThoughtRelation`.
+7. Related thoughts are grouped into `GlobalLogicalThoughtBlock`; every thought receives a `ThoughtBlockMembership.relevance_score`.
+8. New books compare their thoughts with existing global thought blocks before creating new blocks.
+
+Legacy mode `llm_fast_batched` is kept and can still be launched manually, but it is no longer the default.
+
+Dry-run without DB writes:
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe manage.py run_thought_chain_analysis --file "C:\Users\1\Desktop\НИКОЛАЕВ\Компьютерныее сети.fb2" --max-sentences 30 --dry-run --max-pairs 60
+```
+
+Persistent limited run:
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe manage.py run_thought_chain_analysis --file "C:\Users\1\Desktop\НИКОЛАЕВ\Компьютерныее сети.fb2" --max-sentences 30 --max-pairs 60 --force-refresh
+```
+
+Resume an existing book run:
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe manage.py run_thought_chain_analysis --book-id 10 --resume
+```
+
+Required Ollama check:
+
+```powershell
+ollama list
+ollama pull qwen2.5:1.5b
+```
+
+Main environment variables:
+
+```env
+BOOK_ANALYSIS_MODE=llm_thought_chain
+THOUGHT_SAME_BLOCK_THRESHOLD=0.65
+THOUGHT_RELATION_THRESHOLD=0.65
+THOUGHT_BLOCK_MEMBERSHIP_THRESHOLD=0.70
+THOUGHT_CHAIN_DRY_RUN_MAX_PAIRS=60
+```
+
+---
+
+## LLM Thought Chain: Greedy And Strict Modes
+
+The current book-analysis pipeline includes a separate `llm_thought_chain` mode. It is designed to turn a book into a sequence of grounded thoughts and then into logical thought blocks.
+
+### What The Project Does
+
+The application lets a user upload FB2/PDF books, parse their text, split the text into meaningful units, run local LLM analysis through Ollama, store the result in Django/PostgreSQL, and inspect books, summaries, semantic maps, logical blocks, themes, concepts, and source text in the web UI.
+
+### Sentence -> Thought -> Block
+
+`llm_thought_chain` works in three main steps:
+
+1. The book is parsed and split into sentences.
+2. Each sentence is sent to the LLM and converted into a short grounded thought.
+3. Thoughts are grouped into logical blocks.
+
+The sequential step compares a new thought with the accumulated current block, not only with the previous sentence. If the new thought belongs to the current block, it is added and the block idea is updated. If not, the current block is closed and a new block starts.
+
+### Strict Pairwise Mode
+
+Strict mode is intended for small checks and teacher demonstrations. It compares every thought with every other thought through the LLM.
+
+Use it only for small books or limited tests:
+
+```powershell
+.\run_all_thought_chain_books.ps1 -StrictPairwise
+```
+
+### Greedy Mode
+
+Greedy mode is the default production mode for full runs. It is faster and avoids full pairwise explosion.
+
+The logic is:
+
+1. Take the first unused thought as a seed.
+2. Compare each remaining candidate with the accumulated current block.
+3. If the candidate belongs to the block, add it to that block.
+4. Once a thought enters a block, remove it from future seed selection.
+5. Continue from the next unused thought.
+6. Merge blocks with identical or similar titles/main ideas.
+
+Default full run:
+
+```powershell
+.\run_all_thought_chain_books.ps1
+```
+
+Default command mode used by the script:
+
+```text
+--full --strict --mode greedy --merge-same-title-blocks --resume
+```
+
+### Same-title Block Merge
+
+After greedy block creation, the system merges blocks with identical or similar titles/main ideas. The old block is not lost: it is marked as merged and points to the surviving block through `merged_into`. Memberships are moved to the surviving block.
+
+### Demo Files
+
+The small deterministic demo book is committed here:
+
+```text
+test_books/demo/test.fb2
+```
+
+The already existing processed demo result is committed here:
+
+```text
+demo_results/test_fb2_greedy/
+```
+
+The demo analysis was not re-run during packaging. The result snapshot contains:
+
+```text
+thought_chain_analysis_report.md
+thought_chain_analysis_report.json
+quality_report.md
+quality_report.json
+SUMMARY.md
+```
+
+### Dry Plan
+
+To see what would be processed without running analysis or writing DB data:
+
+```powershell
+.\run_all_thought_chain_books.ps1 -DryPlan
+```
+
+### Full Greedy Run For Local Books
+
+Local real books are expected in:
+
+```text
+test_books/new/
+```
+
+Run all books through greedy mode:
+
+```powershell
+.\run_all_thought_chain_books.ps1
+```
+
+Results are written to:
+
+```text
+test_runs/thought_chain/full_auto/
+```
+
+### What Is Not Committed
+
+The repository intentionally excludes real books and runtime artifacts:
+
+- `test_books/new/`
+- `test_books/old/`
+- `.env`
+- virtual environments
+- PostgreSQL data
+- media uploads
+- runtime logs
+- large generated reports under `test_runs/`

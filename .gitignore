@@ -57,6 +57,14 @@ backend/chroma_db/
 postgres_data/
 
 # Reports / generated audit files
+_cleanup_archive_*/
+test_runs/
+*_audit.json
+*_audit.md
+*_report.json
+*_report.md
+*_preview.json
+*_preview.md
 FULL_ANALYSIS_REPORT.md
 ONE_BOOK_ANALYSIS_REPORT.json
 fast_full_batch_*.json
@@ -94,6 +102,7 @@ final_semantic_cleanup_run*/
 final_semantic_cleanup_status/
 
 # Uploaded books / large local files
+test_books/
 *.fb2
 *.epub
 *.pdf
@@ -112,3 +121,13 @@ dist/
 build/
 frontend/dist/
 frontend/build/
+
+# Commit only the small deterministic demo book/result pack.
+!test_books/
+test_books/*
+!test_books/demo/
+!test_books/demo/test.fb2
+!demo_results/
+demo_results/*
+!demo_results/test_fb2_greedy/
+!demo_results/test_fb2_greedy/**

@@ -93,11 +93,12 @@ def _analysis_mode_from_request(value) -> str:
         "llm_preview",
         "llm_full",
         "llm_fast_batched",
+        "llm_thought_chain",
     }:
         if mode == "semantic":
             return "semantic_fast"
         return mode
-    return "llm_fast_batched"
+    return "llm_thought_chain"
 
 
 def _has_cached_analysis(global_cache, *, required_mode: str = "llm_full") -> bool:
@@ -111,6 +112,8 @@ def _has_cached_analysis(global_cache, *, required_mode: str = "llm_full") -> bo
         return pipeline == "llm_full"
     if required_mode == "llm_fast_batched":
         return pipeline == "llm_fast_batched"
+    if required_mode == "llm_thought_chain":
+        return pipeline == "llm_thought_chain"
     if required_mode == "llm_preview":
         return pipeline in {"llm_preview", "llm_full", "llm_fast_batched"}
     if required_mode == "debug_structure":
@@ -180,7 +183,7 @@ class UploadBooksView(APIView):
             )
 
         analysis_mode = _analysis_mode_from_request(request.data.get("analysis_mode"))
-        if analysis_mode in {"llm_full", "llm_preview", "llm_fast_batched"}:
+        if analysis_mode in {"llm_full", "llm_preview", "llm_fast_batched", "llm_thought_chain"}:
             llm_state = ensure_llm_ready(require_enabled=True)
             if not llm_state.get("ok"):
                 return Response(
@@ -314,7 +317,7 @@ class ReanalyzeBookView(APIView):
     def post(self, request, book_id):
         user_book = _get_user_book_or_404(request.user, book_id)
         analysis_mode = _analysis_mode_from_request(request.data.get("analysis_mode"))
-        if analysis_mode in {"llm_full", "llm_preview", "llm_fast_batched"}:
+        if analysis_mode in {"llm_full", "llm_preview", "llm_fast_batched", "llm_thought_chain"}:
             llm_state = ensure_llm_ready(require_enabled=True)
             if not llm_state.get("ok"):
                 return Response(
