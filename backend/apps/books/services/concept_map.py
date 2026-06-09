@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import math
+import re
 from typing import Any
 
 from apps.books.models import BookTheme, ConceptMention, LogicalBlock, ThemeSubtopic, UserBook
@@ -23,6 +24,320 @@ def _circle_positions(count: int, center_x: float, center_y: float, radius: floa
 def _theme_text_for_embedding(theme: BookTheme, subtopics: list[ThemeSubtopic]) -> str:
     names = ", ".join(item.name for item in subtopics[:4])
     return f"{theme.title}. {theme.summary}. {theme.chapter_title}. {names}"[:3200]
+
+
+def _theme_compare_text(theme: BookTheme, subtopics: list[ThemeSubtopic], book_title: str) -> str:
+    subtopic_names = ", ".join(item.name for item in subtopics[:8])
+    return " ".join(
+        item
+        for item in [
+            theme.title,
+            theme.chapter_title,
+            theme.summary,
+            subtopic_names,
+            book_title,
+        ]
+        if item
+    )[:4200]
+
+
+def _avg_vector(vectors: list[list[float]]) -> list[float]:
+    if not vectors:
+        return []
+    size = len(vectors[0])
+    if size == 0:
+        return []
+    result = [0.0] * size
+    for vector in vectors:
+        if len(vector) != size:
+            continue
+        for index, value in enumerate(vector):
+            result[index] += float(value)
+    count = max(1, len(vectors))
+    return [value / count for value in result]
+
+
+def _cluster_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+    return cosine_similarity(left.get("centroid", []), right.get("centroid", []))
+
+
+def _agglomerative_cluster(items: list[dict[str, Any]], target_count: int) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    target_count = max(1, min(target_count, len(items)))
+    clusters = [
+        {
+            "items": [item],
+            "centroid": item["embedding"],
+        }
+        for item in items
+    ]
+    while len(clusters) > target_count:
+        best_pair: tuple[int, int] | None = None
+        best_score = -1.0
+        for left_idx, left in enumerate(clusters):
+            for right_idx in range(left_idx + 1, len(clusters)):
+                score = _cluster_similarity(left, clusters[right_idx])
+                if score > best_score:
+                    best_score = score
+                    best_pair = (left_idx, right_idx)
+        if best_pair is None:
+            break
+        left_idx, right_idx = best_pair
+        merged_items = clusters[left_idx]["items"] + clusters[right_idx]["items"]
+        merged = {
+            "items": merged_items,
+            "centroid": _avg_vector([item["embedding"] for item in merged_items]),
+            "similarity": round(float(best_score), 4),
+        }
+        clusters[left_idx] = merged
+        clusters.pop(right_idx)
+    clusters.sort(key=lambda cluster: (-len(cluster["items"]), str(_cluster_label(cluster["items"]))))
+    return clusters
+
+
+DOMAIN_HINTS: list[tuple[str, set[str]]] = [
+    ("Физика", {"физика", "скорость", "свет", "движение", "механика", "энергия", "импульс", "молекула", "волна", "квант", "частица", "поле", "сила"}),
+    ("Биология", {"биология", "клетка", "фотосинтез", "организм", "молекула", "растение", "животное", "ген", "днк", "белок", "ткань", "экосистема"}),
+    ("Математика", {"математика", "число", "уравнение", "функция", "геометрия", "алгебра", "интеграл", "производная", "дробь", "формула"}),
+    ("Информатика", {"информатика", "алгоритм", "программа", "данные", "сеть", "протокол", "сервер", "клиент", "код", "компьютер", "база"}),
+    ("Химия", {"химия", "реакция", "вещество", "атом", "молекула", "кислота", "основание", "раствор", "элемент"}),
+    ("История", {"история", "государство", "война", "революция", "общество", "империя", "правитель", "эпоха", "народ"}),
+    ("Литература", {"литература", "герой", "сюжет", "персонаж", "роман", "повесть", "образ", "автор", "конфликт"}),
+]
+
+
+GENERIC_LABEL_WORDS = {
+    "глава",
+    "раздел",
+    "тема",
+    "книга",
+    "материал",
+    "пример",
+    "вопрос",
+    "часть",
+    "основы",
+    "понятие",
+    "данные",
+    "информация",
+}
+
+
+def _tokens(value: str) -> list[str]:
+    return [token.lower() for token in re.findall(r"[A-Za-zА-Яа-яЁё0-9-]+", value or "") if len(token) >= 3]
+
+
+def _domain_label(items: list[dict[str, Any]]) -> str:
+    text = " ".join(str(item.get("text", "")) for item in items).lower()
+    token_set = set(_tokens(text))
+    best_label = ""
+    best_score = 0
+    for label, hints in DOMAIN_HINTS:
+        score = len(token_set & hints)
+        if score > best_score:
+            best_label = label
+            best_score = score
+    return best_label if best_score >= 2 else ""
+
+
+def _representative_item(items: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(items) <= 1:
+        return items[0]
+    vectors = [item["embedding"] for item in items]
+    centroid = _avg_vector(vectors)
+    return max(items, key=lambda item: cosine_similarity(item["embedding"], centroid))
+
+
+def _cluster_label(items: list[dict[str, Any]], *, allow_domain: bool = True) -> str:
+    if not items:
+        return "Темы"
+    if allow_domain:
+        domain = _domain_label(items)
+        if domain:
+            return domain
+    representative = _representative_item(items)
+    label = str(representative.get("title", "")).strip()
+    if label:
+        return label[:90]
+    word_counts: dict[str, int] = {}
+    for item in items:
+        for token in _tokens(str(item.get("title", ""))):
+            if token not in GENERIC_LABEL_WORDS:
+                word_counts[token] = word_counts.get(token, 0) + 1
+    if word_counts:
+        top_words = sorted(word_counts.items(), key=lambda row: (-row[1], row[0]))[:3]
+        return " / ".join(word for word, _ in top_words).title()
+    return "Группа тем"
+
+
+def _cluster_keywords(items: list[dict[str, Any]], limit: int = 8) -> list[str]:
+    counts: dict[str, int] = {}
+    for item in items:
+        for token in _tokens(str(item.get("title", "")) + " " + str(item.get("chapter_title", ""))):
+            if token not in GENERIC_LABEL_WORDS and not token.isdigit():
+                counts[token] = counts.get(token, 0) + 1
+    return [word for word, _ in sorted(counts.items(), key=lambda row: (-row[1], row[0]))[:limit]]
+
+
+def _target_cluster_count(count: int, *, top: bool) -> int:
+    if count <= 2:
+        return count
+    if top:
+        return max(2, min(8, round(math.sqrt(count / 2.0))))
+    return max(1, min(7, round(math.sqrt(count))))
+
+
+def _build_theme_compare_map(
+    *,
+    user_books: list[UserBook],
+    themes: list[BookTheme],
+    subtopics_by_theme: dict[int, list[ThemeSubtopic]],
+    book_by_global: dict[int, UserBook],
+) -> dict[str, Any]:
+    if not themes:
+        return {"nodes": [], "edges": [], "meta": {"themes_count": 0, "top_clusters_count": 0, "topic_clusters_count": 0}}
+
+    items: list[dict[str, Any]] = []
+    for theme in themes:
+        user_book = book_by_global.get(theme.global_book_id)
+        if not user_book:
+            continue
+        subtopics = subtopics_by_theme.get(theme.id, [])
+        text = _theme_compare_text(theme, subtopics, user_book.title or user_book.original_filename)
+        embedding = create_embedding(text)
+        items.append(
+            {
+                "theme": theme,
+                "theme_id": theme.id,
+                "title": theme.title,
+                "chapter_title": theme.chapter_title,
+                "summary": theme.summary,
+                "global_book_id": theme.global_book_id,
+                "book_id": user_book.id,
+                "book_title": user_book.title or user_book.original_filename,
+                "text": text,
+                "embedding": embedding,
+                "subtopics": subtopics,
+            }
+        )
+
+    if not items:
+        return {"nodes": [], "edges": [], "meta": {"themes_count": 0, "top_clusters_count": 0, "topic_clusters_count": 0}}
+
+    top_clusters = _agglomerative_cluster(items, _target_cluster_count(len(items), top=True))
+    nodes: list[dict[str, Any]] = []
+    edges: list[dict[str, Any]] = []
+    topic_cluster_count = 0
+
+    width = 1200.0
+    height = 760.0
+    top_positions = _circle_positions(len(top_clusters), width / 2, height / 2, 265.0)
+
+    for top_index, top_cluster in enumerate(top_clusters, start=1):
+        top_id = f"compare-domain-{top_index}"
+        top_items = top_cluster["items"]
+        top_x, top_y = top_positions[top_index - 1] if top_index - 1 < len(top_positions) else (width / 2, height / 2)
+        top_books = sorted({item["book_title"] for item in top_items})
+        top_node = {
+            "id": top_id,
+            "type": "theme_cluster",
+            "cluster_level": "domain",
+            "label": _cluster_label(top_items, allow_domain=True),
+            "theme_count": len(top_items),
+            "books_count": len(top_books),
+            "books": top_books[:12],
+            "keywords": _cluster_keywords(top_items),
+            "summary": "Крупный смысловой блок, собранный из похожих тем разных книг через embeddings.",
+            "x": round(float(top_x), 2),
+            "y": round(float(top_y), 2),
+            "size": 42 + min(28, len(top_items) * 2),
+        }
+        nodes.append(top_node)
+
+        topic_clusters = _agglomerative_cluster(top_items, _target_cluster_count(len(top_items), top=False))
+        topic_cluster_count += len(topic_clusters)
+        topic_positions = _circle_positions(
+            len(topic_clusters),
+            top_x,
+            top_y,
+            max(145.0, min(245.0, 115.0 + len(topic_clusters) * 22.0)),
+            start_angle=-math.pi / 2,
+        )
+
+        for topic_index, topic_cluster in enumerate(topic_clusters, start=1):
+            topic_id = f"{top_id}-topic-{topic_index}"
+            topic_items = topic_cluster["items"]
+            topic_x, topic_y = topic_positions[topic_index - 1] if topic_index - 1 < len(topic_positions) else (top_x, top_y)
+            topic_books = sorted({item["book_title"] for item in topic_items})
+            nodes.append(
+                {
+                    "id": topic_id,
+                    "type": "theme_cluster",
+                    "cluster_level": "topic",
+                    "parent_id": top_id,
+                    "label": _cluster_label(topic_items, allow_domain=False),
+                    "theme_count": len(topic_items),
+                    "books_count": len(topic_books),
+                    "books": topic_books[:12],
+                    "keywords": _cluster_keywords(topic_items),
+                    "summary": "Подгруппа близких тем внутри крупного смыслового блока.",
+                    "x": round(float(topic_x), 2),
+                    "y": round(float(topic_y), 2),
+                    "size": 27 + min(18, len(topic_items) * 2),
+                }
+            )
+            edges.append({"source": top_id, "target": topic_id, "weight": 1.0, "type": "compare_contains"})
+
+            leaf_positions = _circle_positions(
+                len(topic_items),
+                topic_x,
+                topic_y,
+                max(90.0, min(175.0, 74.0 + len(topic_items) * 9.0)),
+                start_angle=math.pi / 2,
+            )
+            for theme_index, item in enumerate(sorted(topic_items, key=lambda row: (row["book_title"], row["theme"].order_number, row["theme_id"]))):
+                theme = item["theme"]
+                leaf_id = f"compare-theme-{theme.id}"
+                leaf_x, leaf_y = leaf_positions[theme_index] if theme_index < len(leaf_positions) else (topic_x, topic_y)
+                subtopic_names = [sub.name for sub in item["subtopics"][:8]]
+                nodes.append(
+                    {
+                        "id": leaf_id,
+                        "type": "compare_theme",
+                        "cluster_level": "theme",
+                        "parent_id": topic_id,
+                        "domain_id": top_id,
+                        "theme_id": theme.id,
+                        "book_id": item["book_id"],
+                        "global_book_id": item["global_book_id"],
+                        "book_title": item["book_title"],
+                        "label": theme.title,
+                        "chapter_title": theme.chapter_title,
+                        "summary": theme.summary,
+                        "subtopics": subtopic_names,
+                        "start_block_number": theme.start_block_number,
+                        "end_block_number": theme.end_block_number,
+                        "start_paragraph": theme.start_paragraph,
+                        "end_paragraph": theme.end_paragraph,
+                        "open_url": f"/library/books/{item['book_id']}/#theme-{theme.id}",
+                        "x": round(float(leaf_x), 2),
+                        "y": round(float(leaf_y), 2),
+                        "size": 17,
+                    }
+                )
+                edges.append({"source": topic_id, "target": leaf_id, "weight": 1.0, "type": "compare_contains"})
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "meta": {
+            "books_count": len(user_books),
+            "themes_count": len(items),
+            "top_clusters_count": len(top_clusters),
+            "topic_clusters_count": topic_cluster_count,
+            "mode": "theme_compare_embeddings",
+        },
+    }
 
 
 def _build_related_theme_edges(theme_nodes: list[dict[str, Any]], theme_texts: dict[str, str]) -> list[dict[str, Any]]:
@@ -163,6 +478,7 @@ def build_user_concept_map(user_id: int) -> dict[str, Any]:
             "nodes": [],
             "edges": [],
             "books": [],
+            "theme_compare": {"nodes": [], "edges": [], "meta": {"themes_count": 0, "top_clusters_count": 0, "topic_clusters_count": 0}},
             "meta": {
                 "books_count": 0,
                 "themes_count": 0,
@@ -187,6 +503,7 @@ def build_user_concept_map(user_id: int) -> dict[str, Any]:
             "nodes": [],
             "edges": [],
             "books": [],
+            "theme_compare": {"nodes": [], "edges": [], "meta": {"themes_count": 0, "top_clusters_count": 0, "topic_clusters_count": 0}},
             "meta": {
                 "books_count": len(book_by_global),
                 "themes_count": 0,
@@ -227,6 +544,7 @@ def build_user_concept_map(user_id: int) -> dict[str, Any]:
             "nodes": [],
             "edges": [],
             "books": [],
+            "theme_compare": {"nodes": [], "edges": [], "meta": {"themes_count": 0, "top_clusters_count": 0, "topic_clusters_count": 0}},
             "meta": {
                 "books_count": 0,
                 "themes_count": 0,
@@ -398,11 +716,18 @@ def build_user_concept_map(user_id: int) -> dict[str, Any]:
         for node in nodes
         if node["type"] == "book"
     ]
+    theme_compare = _build_theme_compare_map(
+        user_books=user_books,
+        themes=themes,
+        subtopics_by_theme=subtopics_by_theme,
+        book_by_global=book_by_global,
+    )
 
     return {
         "nodes": nodes,
         "edges": edges,
         "books": books_payload,
+        "theme_compare": theme_compare,
         "meta": {
             "books_count": len([n for n in nodes if n["type"] == "book"]),
             "themes_count": len([n for n in nodes if n["type"] == "theme"]),

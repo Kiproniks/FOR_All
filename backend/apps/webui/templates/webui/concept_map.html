@@ -31,6 +31,7 @@
                 <button type="button" class="btn outline" id="levelReset">Reset Level</button>
                 <button type="button" class="btn outline" id="viewReset">Reset View</button>
                 <button type="button" class="btn outline" id="fitView">Fit Nodes</button>
+                <button type="button" class="btn" id="compareThemes">Сравнить темы всех книг</button>
             </div>
             <div class="row" style="gap:8px;margin-top:8px;">
                 <button type="button" class="btn outline" id="zoomIn">+</button>
@@ -62,6 +63,9 @@
       const nodes = payload.nodes || [];
       const edges = payload.edges || [];
       const booksPayload = payload.books || [];
+      const comparePayload = payload.theme_compare || { nodes: [], edges: [], meta: {} };
+      const compareNodes = comparePayload.nodes || [];
+      const compareEdges = comparePayload.edges || [];
 
       const SVG_NS = 'http://www.w3.org/2000/svg';
       const svg = document.getElementById('conceptMapSvg');
@@ -73,6 +77,7 @@
       const levelResetEl = document.getElementById('levelReset');
       const viewResetEl = document.getElementById('viewReset');
       const fitViewEl = document.getElementById('fitView');
+      const compareThemesEl = document.getElementById('compareThemes');
       const zoomInEl = document.getElementById('zoomIn');
       const zoomOutEl = document.getElementById('zoomOut');
       const bookFiltersEl = document.getElementById('bookFilters');
@@ -81,14 +86,19 @@
       svg.setAttribute('viewBox', `0 0 ${VIEW_W} ${VIEW_H}`);
 
       const nodeById = new Map(nodes.map(node => [node.id, node]));
+      const compareNodeById = new Map(compareNodes.map(node => [node.id, node]));
       const containsEdges = edges.filter(edge => edge.type === 'contains');
       const relatedThemeEdges = edges.filter(edge => edge.type === 'related');
+      const compareContainsEdges = compareEdges.filter(edge => edge.type === 'compare_contains');
 
       const selectedBooks = new Set(booksPayload.map(item => item.id));
       const state = {
+        mode: 'book',
         level: 'books',
         focusedBookId: null,
         focusedThemeId: null,
+        compareLevel: 'domains',
+        focusedCompareClusterId: null,
       };
 
       const viewState = {
@@ -112,6 +122,8 @@
         theme: 28,
         subtopic: 24,
         concept: 22,
+        theme_cluster: 26,
+        compare_theme: 26,
       };
 
       const viewportGroup = document.createElementNS(SVG_NS, 'g');
@@ -135,13 +147,17 @@
       function nodeRadius(node) {
         const base = Number(node.size || 12);
         if (node.type === 'book') return Math.max(30, base);
+        if (node.type === 'theme_cluster') return Math.max(node.cluster_level === 'domain' ? 36 : 24, base);
         if (node.type === 'theme') return Math.max(20, base);
+        if (node.type === 'compare_theme') return Math.max(15, base);
         return Math.max(13, base);
       }
 
       function nodeLabelSize(node) {
         if (node.type === 'book') return 18;
+        if (node.type === 'theme_cluster') return node.cluster_level === 'domain' ? 18 : 14;
         if (node.type === 'theme') return 14;
+        if (node.type === 'compare_theme') return 12;
         return 12;
       }
 
@@ -191,10 +207,26 @@
         return nodes.filter(node => node.type === 'subtopic' && node.parent_id === themeId);
       }
 
+      function compareDomains() {
+        return compareNodes.filter(node => node.type === 'theme_cluster' && node.cluster_level === 'domain');
+      }
+
+      function compareTopicsForDomain(domainId) {
+        return compareNodes.filter(node => node.type === 'theme_cluster' && node.cluster_level === 'topic' && node.parent_id === domainId);
+      }
+
+      function compareThemesForTopic(topicId) {
+        return compareNodes.filter(node => node.type === 'compare_theme' && node.parent_id === topicId);
+      }
+
+      function compareChildren(parentId) {
+        return compareNodes.filter(node => node.parent_id === parentId);
+      }
+
       function passesQuery(node) {
         const q = (queryEl.value || '').trim().toLowerCase();
         if (!q) return true;
-        const hay = `${node.label || ''} ${node.summary || ''} ${node.chapter_title || ''}`.toLowerCase();
+        const hay = `${node.label || ''} ${node.summary || ''} ${node.chapter_title || ''} ${node.book_title || ''} ${(node.keywords || []).join(' ')} ${(node.subtopics || []).join(' ')}`.toLowerCase();
         return hay.includes(q);
       }
 
@@ -223,6 +255,36 @@
       }
 
       function visibleData() {
+        if (state.mode === 'compare') {
+          if (state.compareLevel === 'domains') {
+            const domains = compareDomains().filter(passesQuery);
+            return { visibleNodes: domains, visibleEdges: [] };
+          }
+
+          if (state.compareLevel === 'topics') {
+            const focusDomain = state.focusedCompareClusterId ? compareNodeById.get(state.focusedCompareClusterId) : null;
+            const domains = (focusDomain && focusDomain.cluster_level === 'domain' ? [focusDomain] : compareDomains()).filter(passesQuery);
+            const allowedDomainIds = new Set(domains.map(node => node.id));
+            const topics = compareNodes
+              .filter(node => node.type === 'theme_cluster' && node.cluster_level === 'topic' && allowedDomainIds.has(node.parent_id))
+              .filter(passesQuery);
+            const visibleIds = new Set([...domains, ...topics].map(node => node.id));
+            const visibleEdges = compareContainsEdges.filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+            return { visibleNodes: [...domains, ...topics], visibleEdges };
+          }
+
+          const focused = state.focusedCompareClusterId ? compareNodeById.get(state.focusedCompareClusterId) : null;
+          const topicNodes = focused && focused.cluster_level === 'topic'
+            ? [focused]
+            : compareNodes.filter(node => node.type === 'theme_cluster' && node.cluster_level === 'topic');
+          const themeNodes = topicNodes.flatMap(topic => compareThemesForTopic(topic.id)).filter(passesQuery);
+          const domainIds = new Set(topicNodes.map(topic => topic.parent_id));
+          const domains = compareDomains().filter(domain => domainIds.has(domain.id));
+          const visibleIds = new Set([...domains, ...topicNodes, ...themeNodes].map(node => node.id));
+          const visibleEdges = compareContainsEdges.filter(edge => visibleIds.has(edge.source) && visibleIds.has(edge.target));
+          return { visibleNodes: [...domains, ...topicNodes, ...themeNodes], visibleEdges };
+        }
+
         if (state.level === 'books') {
           const books = bookNodes().filter(passesQuery);
           const ids = new Set(books.map(node => node.id));
@@ -286,7 +348,52 @@
         return result;
       }
 
+      function maxThemeRadius(count) {
+        if (count <= 2) return 82;
+        return Math.max(96, Math.min(160, 74 + count * 8));
+      }
+
       function applyLayout(visibleNodes) {
+        if (state.mode === 'compare') {
+          const domains = visibleNodes.filter(node => node.type === 'theme_cluster' && node.cluster_level === 'domain');
+          const topics = visibleNodes.filter(node => node.type === 'theme_cluster' && node.cluster_level === 'topic');
+          const themeLeaves = visibleNodes.filter(node => node.type === 'compare_theme');
+
+          if (state.compareLevel === 'domains') {
+            const radius = domains.length <= 1 ? 0 : Math.max(260, Math.min(390, 190 + domains.length * 42));
+            const positions = circlePositions(domains.length, VIEW_W / 2, VIEW_H / 2, radius);
+            domains.forEach((node, index) => {
+              node.x = positions[index][0];
+              node.y = positions[index][1];
+            });
+            return;
+          }
+
+          const domainPositions = circlePositions(domains.length, VIEW_W / 2, VIEW_H / 2, domains.length <= 1 ? 0 : 315);
+          domains.forEach((domain, index) => {
+            domain.x = domainPositions[index][0];
+            domain.y = domainPositions[index][1];
+            const ownTopics = topics.filter(topic => topic.parent_id === domain.id);
+            const positions = circlePositions(ownTopics.length, domain.x, domain.y, state.compareLevel === 'themes' ? 185 : 235);
+            ownTopics.forEach((topic, topicIndex) => {
+              topic.x = positions[topicIndex][0];
+              topic.y = positions[topicIndex][1];
+            });
+          });
+
+          if (state.compareLevel === 'themes') {
+            topics.forEach(topic => {
+              const ownThemes = themeLeaves.filter(theme => theme.parent_id === topic.id);
+              const positions = circlePositions(ownThemes.length, topic.x, topic.y, maxThemeRadius(ownThemes.length));
+              ownThemes.forEach((theme, themeIndex) => {
+                theme.x = positions[themeIndex][0];
+                theme.y = positions[themeIndex][1];
+              });
+            });
+          }
+          return;
+        }
+
         const books = visibleNodes.filter(node => node.type === 'book');
         const themes = visibleNodes.filter(node => node.type === 'theme');
         const subtopics = visibleNodes.filter(node => node.type === 'subtopic');
@@ -387,6 +494,49 @@
           return;
         }
 
+        if (node.type === 'theme_cluster') {
+          const children = compareChildren(node.id).slice(0, 12);
+          detailPanel.innerHTML = `
+            <div class="card">
+              <h3 class="detail-title">${esc(node.label)}</h3>
+              <div class="detail-meta">
+                <span class="badge">${node.cluster_level === 'domain' ? 'Top cluster' : 'Theme group'}</span>
+                <span class="badge">Themes: ${esc(node.theme_count || 0)}</span>
+                <span class="badge">Books: ${esc(node.books_count || 0)}</span>
+              </div>
+              <h4>Main meaning</h4>
+              <div class="pre">${esc(node.summary || 'Cluster built from theme embeddings.')}</div>
+              ${node.keywords && node.keywords.length ? `<h4>Keywords</h4><p>${node.keywords.map(item => `<span class="badge">${esc(item)}</span>`).join(' ')}</p>` : ''}
+              ${node.books && node.books.length ? `<h4>Books</h4><ul class="detail-list">${node.books.map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : ''}
+              <h4>Children</h4>
+              ${children.length ? `<ul class="detail-list">${children.map(item => `<li><strong>${esc(item.label)}</strong> <span class="muted">${esc(item.theme_count || 1)} themes</span></li>`).join('')}</ul>` : '<p class="muted">No children.</p>'}
+              <p class="muted">Click this point or zoom in to open a deeper level.</p>
+            </div>
+          `;
+          return;
+        }
+
+        if (node.type === 'compare_theme') {
+          detailPanel.innerHTML = `
+            <div class="card">
+              <h3 class="detail-title">${esc(node.label)}</h3>
+              <div class="detail-meta">
+                <span class="badge">Theme</span>
+                <span class="badge">${esc(node.book_title || 'Book')}</span>
+                ${node.chapter_title ? `<span class="badge">${esc(node.chapter_title)}</span>` : ''}
+                <span class="badge">blocks ${esc(node.start_block_number)}-${esc(node.end_block_number)}</span>
+              </div>
+              <h4>Main meaning</h4>
+              <div class="pre">${esc(node.summary || 'No summary.')}</div>
+              ${node.subtopics && node.subtopics.length ? `<h4>Subtopics</h4><p>${node.subtopics.map(item => `<span class="badge">${esc(item)}</span>`).join(' ')}</p>` : ''}
+              <div class="action-bar" style="margin-top:10px;">
+                <a class="btn" href="${esc(node.open_url)}">Open source book</a>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
         if (node.type === 'book') {
           detailPanel.innerHTML = `
             <div class="card">
@@ -464,6 +614,16 @@
       }
 
       function setLevelInfo() {
+        if (state.mode === 'compare') {
+          const meta = comparePayload.meta || {};
+          const label = state.compareLevel === 'domains'
+            ? 'Top theme clusters'
+            : state.compareLevel === 'topics'
+              ? 'Theme groups'
+              : 'Concrete themes';
+          levelInfoEl.textContent = `Mode: Compare all themes | Level: ${label} | Zoom: ${viewState.scale.toFixed(2)}x | Themes: ${meta.themes_count || 0}`;
+          return;
+        }
         if (state.level === 'books') {
           levelInfoEl.textContent = `Level: Books | Zoom: ${viewState.scale.toFixed(2)}x`;
           return;
@@ -479,6 +639,21 @@
           ? nodeById.get(state.focusedThemeId).label
           : 'Focused theme';
         levelInfoEl.textContent = `Level: Subtopics (${label}) | Zoom: ${viewState.scale.toFixed(2)}x`;
+      }
+
+      function updateCompareLevelByZoom() {
+        if (state.mode !== 'compare') return false;
+        const previous = state.compareLevel;
+        if (viewState.scale >= 1.9) {
+          state.compareLevel = 'themes';
+        } else if (viewState.scale >= 1.18) {
+          state.compareLevel = 'topics';
+          state.focusedCompareClusterId = null;
+        } else {
+          state.compareLevel = 'domains';
+          state.focusedCompareClusterId = null;
+        }
+        return previous !== state.compareLevel;
       }
 
       function applyTransform() {
@@ -551,6 +726,11 @@
         viewState.tx = p.x - ((p.x - viewState.tx) * (newScale / oldScale));
         viewState.ty = p.y - ((p.y - viewState.ty) * (newScale / oldScale));
         viewState.scale = newScale;
+        if (updateCompareLevelByZoom()) {
+          viewState.autoFitPending = false;
+          render();
+          return;
+        }
         applyTransform();
         setLevelInfo();
       }
@@ -570,18 +750,19 @@
         applyLayout(visibleNodes);
 
         visibleEdges.forEach(edge => {
-          const s = nodeById.get(edge.source);
-          const t = nodeById.get(edge.target);
+          const sourceMap = state.mode === 'compare' ? compareNodeById : nodeById;
+          const s = sourceMap.get(edge.source);
+          const t = sourceMap.get(edge.target);
           if (!s || !t) return;
           const line = document.createElementNS(SVG_NS, 'line');
           line.setAttribute('x1', s.x);
           line.setAttribute('y1', s.y);
           line.setAttribute('x2', t.x);
           line.setAttribute('y2', t.y);
-          line.setAttribute('stroke', edge.type === 'related' ? '#2563eb' : '#64748b');
-          line.setAttribute('stroke-width', edge.type === 'related' ? Math.min(2.2, 0.8 + Number(edge.weight || 0) * 1.2) : 1);
+          line.setAttribute('stroke', edge.type === 'related' ? '#2563eb' : edge.type === 'compare_contains' ? '#0f766e' : '#64748b');
+          line.setAttribute('stroke-width', edge.type === 'related' ? Math.min(2.2, 0.8 + Number(edge.weight || 0) * 1.2) : edge.type === 'compare_contains' ? 1.4 : 1);
           line.setAttribute('stroke-dasharray', edge.type === 'related' ? '8 7' : '');
-          line.setAttribute('opacity', edge.type === 'related' ? '0.32' : '0.26');
+          line.setAttribute('opacity', edge.type === 'related' ? '0.32' : edge.type === 'compare_contains' ? '0.42' : '0.26');
           viewportGroup.appendChild(line);
         });
 
@@ -592,6 +773,9 @@
           let fill = '#0ea5e9';
           if (node.type === 'theme') fill = '#16a34a';
           if (node.type === 'subtopic') fill = '#f59e0b';
+          if (node.type === 'theme_cluster' && node.cluster_level === 'domain') fill = '#0f766e';
+          if (node.type === 'theme_cluster' && node.cluster_level === 'topic') fill = '#14b8a6';
+          if (node.type === 'compare_theme') fill = '#22c55e';
           const radius = nodeRadius(node);
           const labelSize = nodeLabelSize(node);
           const label = labelForNode(node);
@@ -634,6 +818,24 @@
           g.appendChild(text);
           g.addEventListener('click', () => {
             renderDetail(node);
+            if (state.mode === 'compare') {
+              if (node.type === 'theme_cluster' && node.cluster_level === 'domain') {
+                state.compareLevel = 'topics';
+                state.focusedCompareClusterId = node.id;
+                viewState.scale = Math.max(viewState.scale, 1.2);
+                viewState.autoFitPending = true;
+                render();
+                return;
+              }
+              if (node.type === 'theme_cluster' && node.cluster_level === 'topic') {
+                state.compareLevel = 'themes';
+                state.focusedCompareClusterId = node.id;
+                viewState.scale = Math.max(viewState.scale, 1.95);
+                viewState.autoFitPending = true;
+                render();
+              }
+              return;
+            }
             if (node.type === 'book') {
               state.focusedBookId = node.id;
               state.focusedThemeId = null;
@@ -673,6 +875,23 @@
       });
 
       levelBackEl.addEventListener('click', () => {
+        if (state.mode === 'compare') {
+          if (state.compareLevel === 'themes') {
+            state.compareLevel = 'topics';
+            state.focusedCompareClusterId = null;
+            viewState.scale = Math.min(viewState.scale, 1.35);
+          } else if (state.compareLevel === 'topics') {
+            state.compareLevel = 'domains';
+            state.focusedCompareClusterId = null;
+            viewState.scale = Math.min(viewState.scale, 1.0);
+          } else {
+            state.mode = 'book';
+            state.level = 'books';
+          }
+          viewState.autoFitPending = true;
+          render();
+          return;
+        }
         if (state.level === 'subtopics') {
           state.level = 'themes';
           state.focusedThemeId = null;
@@ -685,10 +904,32 @@
       });
 
       levelResetEl.addEventListener('click', () => {
+        state.mode = 'book';
         state.level = 'books';
         state.focusedBookId = null;
         state.focusedThemeId = null;
+        state.compareLevel = 'domains';
+        state.focusedCompareClusterId = null;
         queryEl.value = '';
+        renderDetail(null);
+        viewState.autoFitPending = true;
+        render();
+      });
+
+      compareThemesEl.addEventListener('click', () => {
+        if (!compareNodes.length) {
+          detailPanel.innerHTML = '<p class="muted">No themes are available for comparison yet. Analyze books first.</p>';
+          return;
+        }
+        state.mode = 'compare';
+        state.compareLevel = 'domains';
+        state.focusedCompareClusterId = null;
+        state.level = 'books';
+        state.focusedBookId = null;
+        state.focusedThemeId = null;
+        viewState.scale = 1;
+        viewState.tx = 0;
+        viewState.ty = 0;
         renderDetail(null);
         viewState.autoFitPending = true;
         render();
